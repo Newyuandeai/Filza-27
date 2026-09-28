@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" role="img" aria-label="空文件夹">
+  <defs>
+    <linearGradient id="ef-a" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2ad1c9"/><stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="80" cy="128" rx="52" ry="7" fill="#2ad1c9" opacity=".10"/>
+  <path d="M26 58a7 7 0 0 1 7-7h26l8 10h60a7 7 0 0 1 7 7v44a7 7 0 0 1-7 7H33a7 7 0 0 1-7-7z"
+        fill="none" stroke="url(#ef-a)" stroke-width="3" stroke-linejoin="round" opacity=".9"/>
+  <path d="M26 74h108" stroke="url(#ef-a)" stroke-width="2" opacity=".45"/>
+  <g stroke="#e6edf3" stroke-opacity=".35" stroke-width="2" stroke-linecap="round">
+    <path d="M56 100h48M56 110h30"/>
+  </g>
+  <g fill="none" stroke="#2ad1c9" stroke-width="2" opacity=".75">
+    <circle cx="122" cy="40" r="10"/><path d="M122 34v6l4 3" stroke-linecap="round"/>
+  </g>
+  <g fill="#3b82f6" opacity=".55">
+    <circle cx="38" cy="36" r="3"/><circle cx="49" cy="28" r="2"/><circle cx="33" cy="24" r="1.6"/>
+  </g>
+</svg>

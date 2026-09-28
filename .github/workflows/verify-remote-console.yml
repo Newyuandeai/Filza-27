@@ -1,0 +1,116 @@
+name: Verify Remote Console
+
+# Cheap, dependency-free verification of the remote file viewer console:
+# it stages the web bundle exactly the way the release packager does and then
+# asserts the properties the module relies on. It needs no iOS SDK and no
+# Theos toolchain, so it runs on every change to the console or its handlers.
+
+on:
+  push:
+    paths:
+      - 'Resources/FilzaRemoteWeb/**'
+      - 'FilzaRemoteConsole*'
+      - 'scripts/stage-remote-console-assets.sh'
+      - 'scripts/build_release_ipa.sh'
+      - 'Makefile'
+      - '.github/workflows/verify-remote-console.yml'
+  pull_request:
+    paths:
+      - 'Resources/FilzaRemoteWeb/**'
+      - 'FilzaRemoteConsole*'
+      - 'scripts/stage-remote-console-assets.sh'
+      - 'scripts/build_release_ipa.sh'
+      - 'Makefile'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the console bundle
+        run: bash scripts/stage-remote-console-assets.sh
+
+      - name: Re-check the staged bundle
+        run: bash scripts/stage-remote-console-assets.sh --check
+
+      - name: Assert the packaged files exist
+        run: |
+          set -euo pipefail
+          cd Resources/FilzaRemoteWeb/FilzaRemoteWeb.bundle
+          for path in \
+            Info.plist index.html manifest.webmanifest \
+            css/app.css \
+            js/api.js js/app.js js/browser.js js/preview.js js/transfers.js js/ui.js js/util.js \
+            assets/images/filetype-icon-sprite.svg \
+            assets/images/state-empty-folder.svg \
+            assets/images/state-no-results.svg \
+            assets/images/state-disconnected.svg \
+            assets/images/favicon.svg; do
+            test -s "$path" || { echo "missing or empty: $path" >&2; exit 1; }
+          done
+          echo "bundle files: $(find . -type f | wc -l)"
+
+      - name: Assert the module is wired the way this repo does networking
+        run: |
+          set -euo pipefail
+          grep -Fq 'GCDWebServerOption_BindToLocalhost: @NO' FilzaRemoteConsole.m
+          grep -Fq 'GCDWebServerOption_AutomaticallySuspendInBackground' FilzaRemoteConsole.m
+          grep -Fq 'FilzaRemoteConsoleResourceBundle' FilzaRemoteConsole.m
+          grep -Fq 'CGImageSourceCreateThumbnailAtIndex' FilzaRemoteConsoleAPI.m
+          grep -Fq 'FilzaRemoteConsolePartialSuffix' FilzaRemoteConsoleFileOps.m
+          grep -Fq 'TGPreferencesTableViewController' FilzaRemoteConsolePreferences.m
+          grep -Fq 'include FilzaRemoteConsole.mk' Makefile
+          grep -Fq 'FilzaRemoteWeb.bundle' scripts/build_release_ipa.sh
+          # The console must not introduce a competing server or WebDAV listener.
+          ! grep -Fq 'GCDWebDAVServer' FilzaRemoteConsole.m
+          ! grep -Fq 'listenOnPort' FilzaRemoteConsole.m
+          ! grep -RFq 'CocoaAsyncSocket' FilzaRemoteConsole.m FilzaRemoteConsoleAPI.m FilzaRemoteConsoleFileOps.m
+
+      - name: Assert the console only ever talks to its own host
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path('Resources/FilzaRemoteWeb/FilzaRemoteWeb.bundle')
+          # Hosts the console may legitimately mention: its own device or LAN
+          # address (typed by the user), plus SVG/plist namespace URLs.
+          allowed_hosts = {'www.w3.org', 'apple.com'}
+          def is_local(host: str) -> bool:
+              if host in {'localhost', '127.0.0.1'}:
+                  return True
+              return bool(re.match(r'^(10|127)\.', host)
+                          or re.match(r'^192\.168\.', host)
+                          or re.match(r'^172\.(1[6-9]|2\d|3[01])\.', host))
+          offenders = []
+          pattern = re.compile(r'https?://([^\s"\'`/)]+)')
+          for path in sorted(root.rglob('*')):
+              if path.suffix not in {'.js', '.css', '.html', '.webmanifest', '.svg'}:
+                  continue
+              text = path.read_text(encoding='utf-8', errors='ignore')
+              for host in pattern.findall(text):
+                  if '${' in host or '#' in host:
+                      continue
+                  if is_local(host) or host in allowed_hosts:
+                      continue
+                  offenders.append(f'{path.relative_to(root)}: {host}')
+          if offenders:
+              print('external origins found in the console bundle:', file=sys.stderr)
+              print('\n'.join(offenders), file=sys.stderr)
+              sys.exit(1)
+          print('no external origins referenced by the console bundle')
+          PY
+
+      - name: Assert the console implements the frozen API surface
+        run: |
+          set -euo pipefail
+          for endpoint in ping info list stat search download thumb text hex zip events clients settings upload mkdir rename delete move copy; do
+            grep -Fq "/api/v1/$endpoint" Resources/FilzaRemoteWeb/src/js/api.js \
+              || { echo "console client does not call /api/v1/$endpoint" >&2; exit 1; }
+          done
+          # Handler side: every endpoint that mutates must be registered.
+          for registration in mkdir rename delete move copy zip events; do
+            grep -Fq "/api/v1/$registration" FilzaRemoteConsoleAPI.m FilzaRemoteConsoleFileOps.m \
+              || { echo "server does not register /api/v1/$registration" >&2; exit 1; }
+          done
+          echo "client and server agree on the API surface"

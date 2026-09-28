@@ -1,0 +1,14 @@
+{
+  "name": "FilzaRemote — 远程文件查看控制台",
+  "short_name": "FilzaRemote",
+  "description": "在浏览器里远程浏览、预览、上传和下载设备文件；由设备端 App 内嵌的 FilzaRemote 服务器托管。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0a0c10",
+  "theme_color": "#0a0c10",
+  "orientation": "any",
+  "icons": [
+    { "src": "./assets/images/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

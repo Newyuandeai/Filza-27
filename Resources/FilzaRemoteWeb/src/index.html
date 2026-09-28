@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>FilzaRemote · 远程文件查看器</title>
+<meta name="description" content="在浏览器里远程浏览、预览、上传和下载设备上的文件 —— 由设备端 App 内嵌的 FilzaRemote 服务器托管的控制台。">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./assets/images/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+<!-- icon sprite gets injected here at boot (assets/images/filetype-icon-sprite.svg) -->
+<div id="sprite-mount" aria-hidden="true" hidden></div>
+
+<!-- ───────────────────────── connection / pairing screen ───────────────────────── -->
+<section id="connect-screen" class="connect">
+  <div class="connect__glow" aria-hidden="true">
+    <svg viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid slice" role="presentation">
+      <defs>
+        <radialGradient id="g1" cx="30%" cy="30%" r="60%">
+          <stop offset="0%" stop-color="#2ad1c9" stop-opacity=".55"/>
+          <stop offset="100%" stop-color="#2ad1c9" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="g2" cx="75%" cy="65%" r="55%">
+          <stop offset="0%" stop-color="#3b82f6" stop-opacity=".5"/>
+          <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <rect width="1200" height="600" fill="url(#g1)"/>
+      <rect width="1200" height="600" fill="url(#g2)"/>
+      <g stroke="#2ad1c9" stroke-opacity=".28" stroke-width="1.4" fill="none">
+        <path d="M180 420 C 420 300, 700 300, 1010 190"/>
+        <path d="M180 450 C 430 360, 720 350, 1010 250"/>
+        <path d="M180 480 C 440 420, 740 410, 1010 320"/>
+      </g>
+      <g fill="#e6edf3">
+        <circle cx="180" cy="450" r="5" fill="#2ad1c9"/>
+        <circle cx="1010" cy="253" r="5" fill="#3b82f6"/>
+      </g>
+    </svg>
+  </div>
+
+  <div class="connect__card glass">
+    <div class="connect__brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>FilzaRemote</h1>
+        <p>远程文件查看控制台 · 由设备端 App 内嵌服务器托管</p>
+      </div>
+    </div>
+
+    <form id="connect-form" class="connect__form" autocomplete="off" novalidate>
+      <label class="field">
+        <span class="field__label">主机地址</span>
+        <input id="connect-host" name="host" type="text" inputmode="url" spellcheck="false"
+               placeholder="http://192.168.1.20:8787">
+      </label>
+
+      <label class="field">
+        <span class="field__label">配对令牌<span class="field__hint">App 仪表盘上显示，或粘贴配对链接自动填入</span></span>
+        <input id="connect-token" name="token" type="password" spellcheck="false"
+               placeholder="XXXX-XXXX-XXXX-XXXX-XXXX">
+      </label>
+
+      <label class="field field--pair">
+        <span class="field__label">粘贴配对链接（可选）</span>
+        <input id="connect-pair" name="pair" type="text" spellcheck="false"
+               placeholder="http://192.168.1.20:8787/#pair=XXXX-…">
+      </label>
+
+      <div class="connect__actions">
+        <button type="submit" class="btn btn--primary" id="connect-submit">连接</button>
+        <button type="button" class="btn btn--ghost" id="connect-demo">用本机演示宿主</button>
+      </div>
+      <p id="connect-error" class="connect__error" role="alert" hidden></p>
+    </form>
+
+    <ul class="connect__facts">
+      <li id="fact-version">协议：FilzaRemote API v1</li>
+      <li>能力：浏览 · 预览 · 上传（可续传）· 下载 · 打包 ZIP · 服务端搜索 · 实时刷新</li>
+      <li>令牌只存在这台浏览器的 localStorage，不会发往任何第三方</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── application shell ─────────────────────────────── -->
+<div id="app-shell" class="shell" hidden>
+  <header class="topbar glass">
+    <button class="icon-btn" id="btn-sidebar" title="侧栏" aria-label="切换侧栏"></button>
+    <div class="brand">
+      <span class="mark mark--sm" aria-hidden="true"></span>
+      <span class="brand__name">FilzaRemote</span>
+    </div>
+
+    <div class="conn" id="conn-pill" title="连接状态">
+      <span class="conn__dot" id="conn-dot"></span>
+      <span class="conn__host" id="conn-host">—</span>
+      <span class="conn__meta" id="conn-meta"></span>
+    </div>
+
+    <form class="search" id="search-form" role="search">
+      <span class="search__icon" aria-hidden="true"></span>
+      <input id="search-input" type="search" placeholder="在当前目录下递归搜索…" spellcheck="false">
+      <button type="button" class="search__clear icon-btn" id="search-clear" title="清除"></button>
+    </form>
+
+    <div class="topbar__actions">
+      <button class="btn btn--ghost" id="btn-upload">上传</button>
+      <button class="btn btn--ghost" id="btn-newfolder">新建文件夹</button>
+      <button class="btn btn--ghost" id="btn-transfers">传输<span class="badge" id="transfers-badge" hidden>0</span></button>
+      <button class="icon-btn" id="btn-theme" title="切换主题"></button>
+      <button class="icon-btn" id="btn-disconnect" title="断开连接"></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- sidebar -->
+    <aside class="sidebar glass" id="sidebar">
+      <section class="panel">
+        <h2 class="panel__title">存储</h2>
+        <div class="meter" id="storage-meter">
+          <div class="meter__bar"><span class="meter__fill" id="storage-fill"></span></div>
+          <div class="meter__legend">
+            <span id="storage-used">—</span>
+            <span id="storage-free">—</span>
+          </div>
+        </div>
+        <dl class="kv" id="device-info">
+          <div><dt>设备</dt><dd id="dev-model">—</dd></div>
+          <div><dt>系统</dt><dd id="dev-os">—</dd></div>
+          <div><dt>端口</dt><dd id="dev-port">—</dd></div>
+          <div><dt>运行</dt><dd id="dev-uptime">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title">位置</h2>
+        <ul class="root-list" id="root-list"></ul>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel__title">收藏</h2>
+        <ul class="root-list root-list--fav" id="favorite-list">
+          <li class="empty-hint" id="favorites-empty">在路径右键可加入收藏</li>
+        </ul>
+      </section>
+
+      <section class="panel panel--foot">
+        <p class="muted" id="sidebar-foot">未连接</p>
+      </section>
+    </aside>
+
+    <!-- main -->
+    <main class="main" id="main">
+      <div class="toolbar">
+        <div class="toolbar__nav">
+          <button class="icon-btn" id="btn-back" title="后退"></button>
+          <button class="icon-btn" id="btn-forward" title="前进"></button>
+          <button class="icon-btn" id="btn-up" title="上一级"></button>
+          <button class="icon-btn" id="btn-reload" title="刷新"></button>
+        </div>
+
+        <nav class="crumbs" id="crumbs" aria-label="路径"></nav>
+
+        <div class="toolbar__right">
+          <button class="icon-btn" id="btn-hidden" title="显示隐藏文件"></button>
+          <label class="select">
+            <span>排序</span>
+            <select id="sort-select">
+              <option value="name">名称</option>
+              <option value="size">大小</option>
+              <option value="mtime">修改时间</option>
+              <option value="kind">类型</option>
+            </select>
+          </label>
+          <div class="segmented" role="group" aria-label="视图">
+            <button class="seg is-active" id="view-list" title="列表视图"></button>
+            <button class="seg" id="view-grid" title="网格视图"></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="selbar glass" id="selbar" hidden>
+        <span class="selbar__count" id="sel-count">已选 0 项</span>
+        <div class="selbar__actions">
+          <button class="btn btn--ghost" id="sel-download">打包下载</button>
+          <button class="btn btn--ghost" id="sel-copy">复制到…</button>
+          <button class="btn btn--ghost" id="sel-move">移动到…</button>
+          <button class="btn btn--ghost" id="sel-fav">收藏</button>
+          <button class="btn btn--danger" id="sel-delete">删除</button>
+          <button class="btn btn--ghost" id="sel-clear">取消选择</button>
+        </div>
+      </div>
+
+      <div class="listing" id="listing" tabindex="0" aria-live="polite"></div>
+      <footer class="statusbar" id="statusbar">
+        <span id="status-items">—</span>
+        <span id="status-path" class="mono"></span>
+        <span id="status-note"></span>
+      </footer>
+    </main>
+
+    <!-- transfers drawer -->
+    <aside class="drawer glass" id="transfers-panel" hidden>
+      <header class="drawer__head">
+        <h2>传输</h2>
+        <button class="icon-btn" id="transfers-close" title="关闭"></button>
+      </header>
+      <div class="drawer__tabs">
+        <button class="tab is-active" data-tab="all">全部</button>
+        <button class="tab" data-tab="upload">上传</button>
+        <button class="tab" data-tab="download">下载</button>
+        <button class="btn btn--ghost btn--sm" id="transfers-clear">清空已完成</button>
+      </div>
+      <ul class="transfer-list" id="transfer-list"></ul>
+    </aside>
+  </div>
+
+  <div class="drop-overlay" id="drop-overlay" hidden>
+    <div class="drop-overlay__inner">
+      <strong>松开即可上传</strong>
+      <span id="drop-target" class="mono"></span>
+    </div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root" class="toasts" aria-live="polite"></div>
+<div id="context-menu" class="ctx" hidden></div>
+
+<script type="module" src="./js/app.js"></script>
+<noscript><p class="noscript">该控制台需要 JavaScript。设备端服务器仍在运行，可直接调用 <code>/api/v1/…</code>。</p></noscript>
+</body>
+</html>
