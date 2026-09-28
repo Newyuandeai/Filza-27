@@ -1,5 +1,7 @@
 # FilzaSlop / Filza-27
 
+中文文档：[Windows 使用 GitHub Actions 打包 IPA](docs/GITHUB_IPA_WINDOWS_ZH.md) · [2026-09-28 代码检查记录](docs/CODE_REVIEW_2026-09-28_ZH.md)
+
 A jailed, sideloadable Filza fork combining Filza with app/container management, ByeTunes, Mond 2.2, WebDAV, SSH/SFTP, and the 3105 patch workspace.
 
 [![Filza ByeTunes Upstream Release](https://img.shields.io/badge/release-ByeTunes%20Upstream-brightgreen)](https://github.com/NightVibes33/Filza-27/releases/tag/Filza-27-byetunes-upstream)
@@ -34,6 +36,7 @@ A jailed, sideloadable Filza fork combining Filza with app/container management,
 | HouseArrest / Santander | ✅ | Access remains OS/build-specific |
 | WebDAV server | ⚠️ Runtime unverified | App-hosted listener builds successfully, but device behavior is currently unverified and likely broken |
 | SSH/SFTP server | ⚠️ Runtime unverified | wolfSSH/SFTP builds successfully, but real device connections and background behavior are currently unverified and likely broken |
+| Remote browser console | ✅ Build-verified | Browser file viewer hosted on the repo's existing GCDWebServer runtime; enable under **Preferences → REMOTE CONSOLE** and pair with the token shown there. Contract: [`docs/API.md`](docs/API.md) |
 | Home Screen quick actions | ✅ Build verified | The packaged `apps-manager` shortcut normalizes to the embedded 3105 route; in-app Apps Manager uses the same 3105 presenter |
 | Shared third-party panel | ✅ | 3105, Mond, presented ByeTunes; Filza browser UI unchanged |
 | Full jailbreak / writable system volume | ❌ Not claimed | Outside this project's proven capabilities |
@@ -147,6 +150,71 @@ sftp -P 2222 filza@192.168.4.20
 The app activates an audio-mode keepalive while SSH/SFTP is enabled so an established listener can continue when Filza moves to the background. Force-quitting the app, process termination, or the OS revoking execution still stops an in-process server.
 
 The displayed private address is reachable only on the local network (and can also be used by a terminal app on the same device). Remote Internet access requires a successful router mapping, a manually configured forward, or a separate VPN/tunnel. A NAT-PMP/UPnP failure is a public-mapping failure, not an SSH listener failure.
+
+## Remote browser console
+
+A browser-based file viewer served from inside the injected Filza process, on the
+GCDWebServer runtime this repository already vendors (the same dependency WebDAV
+uses). No second HTTP server and no new third-party code are introduced.
+
+Enable it in Filza's own preferences: **REMOTE CONSOLE → Enable remote console**.
+That section also shows the pairing link, rotates the pairing token, changes the
+listening port (8788 by default) and gates writes and deletes independently.
+
+```text
+http://<device-ip>:8788/#pair=<token>
+```
+
+Capabilities: browse, preview (images, video/audio, PDF, text, hex), resumable
+chunked upload with progress, download with `Range` support, streamed ZIP of a
+selection, server-side recursive search, rename/move/copy/delete, live directory
+refresh over SSE, and a request log at `GET /api/v1/clients`.
+
+Roots follow the same capability model as the rest of Filza-27: `/App` is the Filza
+container, `/Media` the media library, `/Containers` and `/Shared` the application
+and App Group containers, `/System` a read-only view of `/private/var`. A root that
+the running process cannot read is simply not offered.
+
+Security: the listener binds the LAN and requires the pairing token (128-bit-class,
+constant-time comparison, displayed only on the device). The console bundle itself is
+served unauthenticated because it is only UI files; every `/api/v1` call needs the
+token. Pairing links contain the token, so treat them as credentials.
+
+Status is written to `Documents/FilzaSlop Logs/RemoteConsoleStatus.txt` next to
+`WebDAVStatus.txt` and `SSHStatus.txt`.
+
+CI: `.github/workflows/verify-remote-console.yml` stages the bundle, asserts the
+packaged files, the module wiring, that the console references no external origin,
+and that the client and the server agree on the API surface.
+
+> Device-runtime behavior of the console is unverified here for the same reason
+> WebDAV and SSH are unverified: the packaging job proves compilation, linking and
+> artifact structure, not that every private API behaves identically on every build.
+
+### Build an IPA with the console (no Mac required)
+
+1. Push this tree to your own GitHub repository (a fork is fine). Actions needs the
+   two submodules, so keep them enabled in the fork.
+2. Actions → **Build Filza-27 IPA with Remote Console** → *Run workflow*.
+   Leave `base_ipa_url` empty unless you have your own unsigned Filza shell; the
+   pinned Filza-27 release IPA is used as the base by default.
+3. Wait for the run (the first one builds Theos, idevice FFI, libssh/mbedTLS and
+   wolfSSH/wolfSSL; later runs hit the caches).
+4. Download the artifact **`Filza-27-remote-console-ipa-<run>`** and sideload
+   `Filza-27-remote-console.ipa` with your signer. Keep the bundle identifier
+   `com.apple.mobile.MobileHouseArrest` when the signer allows it.
+5. Open Filza on the phone. On first launch the console starts and shows an alert
+   with the pairing link. Copy it, open it in a browser on a computer that is on
+   the **same Wi-Fi**, and you are browsing the device's files.
+
+Requirements and caveats:
+
+- The runner label defaults to `macos-26-intel`, matching
+  `diagnose-full-build.yml`; override the `runner` input if your runner differs.
+- The console can be turned off, its port changed, and its token rotated under
+  **Preferences → REMOTE CONSOLE**.
+- This is an unsigned IPA. It is not a full jailbreak: what the console can see is
+  exactly what the Filza process can read on your iOS build.
 
 ## Shared third-party UI contract
 

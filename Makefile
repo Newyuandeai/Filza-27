@@ -185,4 +185,10 @@ before-FilzaApplySandboxExt-all::
 # required stage -> patch -> compile order.
 include FilzaSSHMetadata.mk
 include FilzaByeTunesNetwork.mk
+
+# Browser-based remote file viewer console (GCDWebServer handlers + staged
+# FilzaRemoteWeb.bundle). Included before the target rules so its FILES and
+# before-* assertions are part of the actual build.
+include FilzaRemoteConsole.mk
+
 include $(THEOS_MAKE_PATH)/tweak.mk
