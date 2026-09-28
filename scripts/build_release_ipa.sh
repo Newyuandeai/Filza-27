@@ -85,12 +85,31 @@ rm -rf "$APP/Filza3105.bundle"
 cp -R "$REPO_ROOT/ThirdParty/3105/Resources/Filza3105.bundle" "$APP/Filza3105.bundle"
 bash "$REPO_ROOT/scripts/merge-3105-app-metadata.sh" "$APP/Info.plist"
 
+# Remote file viewer console (docs/API.md). The bundle is staged from
+# Resources/FilzaRemoteWeb/src and served by FilzaRemoteConsole over the same
+# GCDWebServer runtime that owns WebDAV — no extra listener is introduced here.
+bash "$REPO_ROOT/scripts/stage-remote-console-assets.sh"
+[[ -s "$REPO_ROOT/Resources/FilzaRemoteWeb/FilzaRemoteWeb.bundle/index.html" ]] || {
+  echo "remote console staging did not produce index.html" >&2
+  exit 73
+}
+rm -rf "$APP/FilzaRemoteWeb.bundle"
+cp -R "$REPO_ROOT/Resources/FilzaRemoteWeb/FilzaRemoteWeb.bundle" "$APP/FilzaRemoteWeb.bundle"
+[[ -s "$APP/FilzaRemoteWeb.bundle/index.html" ]] || {
+  echo "remote console bundle was not copied into the app" >&2
+  exit 74
+}
+[[ -s "$APP/FilzaRemoteWeb.bundle/assets/images/filetype-icon-sprite.svg" ]] || {
+  echo "remote console icon sprite missing from the packaged bundle" >&2
+  exit 75
+}
+
 # The WebDAV and SSH/SFTP runtimes bind to the LAN and optionally publish
 # Bonjour services. Keep standalone/manual release packaging in exact parity
 # with the verified modern Actions IPA so iOS can present Local Network
 # permission and permit both advertised service types.
 plutil -replace NSLocalNetworkUsageDescription -string \
-  "Filza 27 uses your local network when you enable its WebDAV or SSH/SFTP server." \
+  "Filza 27 uses your local network when you enable its WebDAV server, SSH/SFTP server or remote browser file console." \
   "$APP/Info.plist"
 plutil -replace NSBonjourServices -json '["_http._tcp","_ssh._tcp"]' "$APP/Info.plist"
 
