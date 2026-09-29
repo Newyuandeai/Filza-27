@@ -5,7 +5,7 @@
  */
 import { FilzaClient, saveUrl } from './api.js';
 import { $, $$, el, esc, fmtBytes, fmtDuration, fmtRel, baseName, debounce, plural } from './util.js';
-import { loadSprite, icon, toast, modal, pickDirectory, setBanner, hideContextMenu } from './ui.js';
+import { loadSprite, icon, toast, modal, pickDirectory, setBanner, hideContextMenu, contextMenu } from './ui.js';
 import { Browser } from './browser.js';
 import { Transfers } from './transfers.js';
 import { Preview } from './preview.js';
@@ -59,6 +59,7 @@ class App {
 
   async boot() {
     await loadSprite();
+    this.#applyStaticIcons();
     this.applyTheme(this.settings.theme);
     this.browser.view = this.settings.view || 'list';
     this.browser.showHidden = !!this.settings.showHidden;
@@ -66,6 +67,9 @@ class App {
 
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const pairToken = params.get('pair') || params.get('token');
+    // `live=0` disables the SSE refresh: useful on flaky networks and required by
+    // generic page-check tooling that waits for the network to go idle.
+    this.live = params.get('live') !== '0';
     const saved = readJSON(KEY.conn, null);
     $('#connect-host').value = saved?.baseUrl || window.location.origin;
     if (pairToken) {
@@ -79,6 +83,33 @@ class App {
       await this.connect(window.location.origin, pairToken);
     } else if (saved?.token) {
       await this.connect(saved.baseUrl, saved.token, { silent: true });
+    }
+  }
+
+  /** Icons for the buttons that live in index.html (they ship without glyphs). */
+  #applyStaticIcons() {
+    const map = {
+      'btn-sidebar': 'sidebar',
+      'btn-back': 'arrow-left',
+      'btn-forward': 'arrow-right',
+      'btn-up': 'arrow-up',
+      'btn-reload': 'refresh',
+      'btn-hidden': 'eye',
+      'btn-disconnect': 'x-circle',
+      'btn-theme': 'sun',
+      'search-clear': 'close',
+      'view-list': 'list',
+      'view-grid': 'grid',
+      'transfers-close': 'close',
+      'btn-overflow': 'more',
+    };
+    for (const [id, name] of Object.entries(map)) {
+      const button = document.getElementById(id);
+      if (button && !button.querySelector('svg')) button.insertAdjacentHTML('afterbegin', icon(name));
+    }
+    for (const [id, name] of Object.entries({ 'btn-upload': 'upload', 'btn-newfolder': 'folder-plus', 'btn-transfers': 'transfer' })) {
+      const button = document.getElementById(id);
+      if (button && !button.querySelector('svg')) button.insertAdjacentHTML('afterbegin', icon(name, 'i--sm'));
     }
   }
 
@@ -184,6 +215,10 @@ class App {
     this.events?.close();
     this.events = null;
     if (!this.client || !this.browser.path) return;
+    if (this.live === false) {
+      $('#status-note').dataset.live = 'off';
+      return;
+    }
     this.events = this.client.events(this.browser.path, {
       onEvent: () => this.reloadSoon(),
       onError: () => this.#setConnState('down'),
@@ -279,14 +314,12 @@ class App {
         button.addEventListener('click', () => this.browser.navigate(path));
         button.addEventListener('contextmenu', (event) => {
           event.preventDefault();
-          const target = event.currentTarget;
           const menu = [
             { label: '打开', icon: 'folder', action: () => this.browser.navigate(path) },
             { label: '复制路径', icon: 'link', action: () => navigator.clipboard?.writeText(path) },
           ];
           if (group.kind === 'star-filled') menu.push({ label: '移除收藏', icon: 'trash', danger: true, action: () => this.removeFavorite(path) });
-          void target;
-          import('./ui.js').then((ui) => ui.contextMenu(menu, { x: event.clientX, y: event.clientY }));
+          contextMenu(menu, { x: event.clientX, y: event.clientY });
         });
         item.append(button);
         favList.append(item);
@@ -363,6 +396,19 @@ class App {
     });
 
     $('#btn-disconnect').addEventListener('click', () => this.disconnect());
+    $('#btn-overflow').addEventListener('click', (event) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      contextMenu([
+        { label: '上传文件', icon: 'upload', action: () => this.openFilePicker(this.browser.path) },
+        { label: '新建文件夹', icon: 'folder-plus', action: () => this.browser.newFolder() },
+        { label: '传输记录', icon: 'transfer', action: () => this.transfers.togglePanel() },
+        { label: this.settings.theme === 'dark' ? '切换到浅色' : '切换到深色', icon: this.settings.theme === 'dark' ? 'sun' : 'moon', action: () => this.applyTheme(this.settings.theme === 'dark' ? 'light' : 'dark') },
+        'sep',
+        { label: this.browser.showHidden ? '隐藏点文件' : '显示隐藏文件', icon: this.browser.showHidden ? 'eye-off' : 'eye', action: () => { this.browser.showHidden = !this.browser.showHidden; this.browser.reload(); } },
+        { label: '设备与设置', icon: 'settings', action: () => this.openDeviceModal() },
+        { label: '断开连接', icon: 'x-circle', danger: true, action: () => this.disconnect() },
+      ], { x: rect.right - 220, y: rect.bottom + 6 });
+    });
     $('#btn-theme').addEventListener('click', () => this.applyTheme(this.settings.theme === 'dark' ? 'light' : 'dark'));
     $('#btn-sidebar').addEventListener('click', () => $('.shell').classList.toggle('sidebar-open'));
     $('#conn-pill').addEventListener('click', () => this.openDeviceModal());

@@ -239,7 +239,8 @@ html[data-theme="light"] .connect__error { color: #7f1d1d; }
 .search input:focus { outline: none; border-color: rgba(42, 209, 201, .45); box-shadow: 0 0 0 3px var(--accent-soft); }
 .search__clear { position: absolute; right: 2px; width: 30px; height: 30px; }
 
-.topbar__actions { display: flex; align-items: center; gap: 6px; }
+.topbar__actions { display: flex; align-items: center; gap: 6px; flex: none; }
+#btn-overflow { display: none; }
 .badge {
   min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px;
   border-radius: 99px; background: var(--accent); color: #04201f;
@@ -348,7 +349,32 @@ html[data-theme="light"] .connect__error { color: #7f1d1d; }
 .row.is-selected { background: var(--accent-soft); border-color: rgba(42, 209, 201, .3); }
 .row.is-cursor { box-shadow: inset 2px 0 0 var(--accent); }
 .row__check { display: grid; place-items: center; }
-.row__check input { accent-color: var(--accent); width: 15px; height: 15px; }
+.row__check input, .card__check input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px; height: 16px;
+  margin: 0;
+  border-radius: 5px;
+  border: 1.5px solid var(--stroke-strong);
+  background: rgba(0, 0, 0, .22);
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+html[data-theme="light"] .row__check input, html[data-theme="light"] .card__check input { background: rgba(255, 255, 255, .7); }
+.row__check input:hover, .card__check input:hover { border-color: var(--accent); }
+.row__check input:checked, .card__check input:checked {
+  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+}
+.row__check input:checked::after, .card__check input:checked::after {
+  content: "";
+  width: 9px; height: 5px;
+  border-left: 2px solid #04201f;
+  border-bottom: 2px solid #04201f;
+  transform: rotate(-45deg) translate(0, -1px);
+}
+.row__check input:focus-visible, .card__check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .row__name { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .row__name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row__icon { display: grid; place-items: center; width: 22px; }
@@ -394,7 +420,6 @@ html[data-theme="light"] .connect__error { color: #7f1d1d; }
 .card__meta { font-size: 11px; color: var(--text-faint); }
 .card__check { position: absolute; top: 7px; left: 7px; opacity: 0; transition: opacity .15s; }
 .card:hover .card__check, .card.is-selected .card__check { opacity: 1; }
-.card__check input { accent-color: var(--accent); width: 15px; height: 15px; }
 
 /* states */
 .state { display: grid; place-items: center; gap: 12px; padding: 54px 20px; text-align: center; color: var(--text-dim); }
@@ -555,9 +580,16 @@ html[data-theme="light"] .banner { color: #7c4a03; }
   .row__kind, .row__time { display: none; }
 }
 @media (max-width: 620px) {
-  .topbar { height: 54px; padding: 0 10px; gap: 8px; }
+  .topbar { height: 54px; padding: 0 10px; gap: 6px; }
   .conn__meta { display: none; }
-  .topbar__actions .btn { padding: 0 9px; font-size: 12px; }
+  .conn { max-width: 38vw; min-width: 0; }
+  /* The full action set cannot fit; the overflow button (⋯) carries it instead. */
+  .topbar__actions > #btn-upload,
+  .topbar__actions > #btn-newfolder,
+  .topbar__actions > #btn-transfers,
+  .topbar__actions > #btn-theme,
+  .topbar__actions > #btn-disconnect { display: none; }
+  .topbar__actions > #btn-overflow { display: inline-grid; }
   .toolbar { padding: 8px 10px 6px; gap: 6px; }
   .toolbar__right .select { display: none; }
   .list-head { display: none; }

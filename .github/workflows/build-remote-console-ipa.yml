@@ -185,6 +185,19 @@ jobs:
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           echo "===== BUILD TAIL ====="
           tail -n 200 build-logs/package.log || true
+
+          # Surface the interesting lines on the run page, so a failure can be read
+          # (and pasted) without downloading the log artifact.
+          {
+            echo "### Packaging exit code: ${rc}"
+            echo ''
+            echo '```text'
+            grep -nE "error:|fatal error|clang: error|ld: |Undefined symbols|The following build commands failed|AssertionError|Missing |No such file" build-logs/package.log | tail -n 150 || true
+            echo '--- tail ---'
+            tail -n 80 build-logs/package.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
           exit "$rc"
 
       - name: Verify the packaged IPA contains the console
