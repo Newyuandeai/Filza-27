@@ -23,6 +23,8 @@ before-FilzaApplySandboxExt-all::
 	@test -f "scripts/stage-remote-console-assets.sh" || (echo "Missing remote console staging script" >&2; exit 1)
 	@bash scripts/stage-remote-console-assets.sh
 	@bash scripts/stage-remote-console-assets.sh --check
+	@test -f "scripts/check-remote-console-sources.py" || (echo "Missing remote console source checker" >&2; exit 1)
+	@if python3 -c 'pass' >/dev/null 2>&1; then python3 scripts/check-remote-console-sources.py; elif python -c 'pass' >/dev/null 2>&1; then python scripts/check-remote-console-sources.py; else echo "no usable python; skipping console source checks"; fi
 	@grep -Fq 'GCDWebServerOption_AutomaticallySuspendInBackground' FilzaRemoteConsole.m
 	@grep -Fq 'GCDWebServerOption_BindToLocalhost: @NO' FilzaRemoteConsole.m
 	@grep -Fq 'SecRandomCopyBytes' FilzaRemoteConsole.m

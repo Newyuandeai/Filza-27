@@ -68,6 +68,14 @@ jobs:
           ! grep -Fq 'listenOnPort' FilzaRemoteConsole.m
           ! grep -RFq 'CocoaAsyncSocket' FilzaRemoteConsole.m FilzaRemoteConsoleAPI.m FilzaRemoteConsoleFileOps.m
 
+      # This is the cheap stand-in for the iOS compiler: it caught a C keyword
+      # used as an identifier and a block capturing an NSError** out-parameter,
+      # both of which only surfaced as hard errors at the end of a Theos build.
+      - name: Check the console sources for compiler-hostile constructs
+        run: |
+          set -euo pipefail
+          python3 scripts/check-remote-console-sources.py
+
       - name: Assert the console only ever talks to its own host
         run: |
           python3 - <<'PY'

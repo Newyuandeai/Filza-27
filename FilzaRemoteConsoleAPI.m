@@ -7,8 +7,8 @@
 //  for WebDAV. Filza's own process permissions decide what is actually visible;
 //  the console reports capability instead of pretending access exists.
 //
-//  Endpoints here:  ping · info · list · stat · search · download · thumb ·
-//                   text · hex · clients · settings · token/rotate
+//  Endpoints here:  ping 路 info 路 list 路 stat 路 search 路 download 路 thumb 路
+//                   text 路 hex 路 clients 路 settings 路 token/rotate
 //  Uploads, mutations, ZIP and SSE live in FilzaRemoteConsoleFileOps.m.
 //
 
@@ -47,17 +47,17 @@ static NSArray<NSDictionary<NSString *, id> *> *FilzaRemoteConsoleRootTable(void
         if (home.length) {
             [roots addObject:@{
                 @"name": @"App",
-                @"label": @"Filza 容器",
+                @"label": @"Filza 瀹瑰櫒",
                 @"path": home,
                 @"writable": @YES,
             }];
         }
 
         NSArray<NSDictionary<NSString *, id> *> *candidates = @[
-            @{@"name": @"Media", @"label": @"媒体与 DCIM", @"path": @"/private/var/mobile/Media", @"writable": @YES},
-            @{@"name": @"Containers", @"label": @"应用数据容器", @"path": @"/private/var/mobile/Containers/Data/Application", @"writable": @YES},
-            @{@"name": @"Shared", @"label": @"App Group 容器", @"path": @"/private/var/mobile/Containers/Shared/AppGroup", @"writable": @YES},
-            @{@"name": @"System", @"label": @"系统（只读）", @"path": @"/private/var", @"writable": @NO},
+            @{@"name": @"Media", @"label": @"濯掍綋涓?DCIM", @"path": @"/private/var/mobile/Media", @"writable": @YES},
+            @{@"name": @"Containers", @"label": @"搴旂敤鏁版嵁瀹瑰櫒", @"path": @"/private/var/mobile/Containers/Data/Application", @"writable": @YES},
+            @{@"name": @"Shared", @"label": @"App Group 瀹瑰櫒", @"path": @"/private/var/mobile/Containers/Shared/AppGroup", @"writable": @YES},
+            @{@"name": @"System", @"label": @"绯荤粺锛堝彧璇伙級", @"path": @"/private/var", @"writable": @NO},
         ];
         for (NSDictionary<NSString *, id> *candidate in candidates) {
             NSString *path = candidate[@"path"];
@@ -95,22 +95,26 @@ NSDictionary<NSString *, id> *FilzaRemoteConsoleResolveRoot(NSString *rootName)
     return nil;
 }
 
+/// Out-parameter helper. Deliberately a function and not a block: a block would
+/// capture the __autoreleasing NSError** and trip -Wblock-capture-autoreleasing,
+/// which this repo's Theos flags promote to an error.
+static void FilzaRemoteConsoleSetPathError(NSError **error, NSInteger code, NSString *errorCode, NSString *message)
+{
+    if (!error) return;
+    *error = [NSError errorWithDomain:@"FilzaRemoteConsole"
+                                 code:code
+                             userInfo:@{NSLocalizedDescriptionKey: message ?: errorCode,
+                                        @"filzaErrorCode": errorCode ?: @"internal"}];
+}
+
 /// Maps an untrusted virtual path to an absolute path, or fails with the exact
 /// error code the contract documents (bad_request / forbidden / not_found).
 NSString *FilzaRemoteConsoleResolveVirtualPath(NSString *virtualPath,
                                                NSString **rootNameOut,
                                                NSError **error)
 {
-    void (^fail)(NSInteger, NSString *, NSString *) = ^(NSInteger code, NSString *errorCode, NSString *message) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"FilzaRemoteConsole"
-                                         code:code
-                                     userInfo:@{NSLocalizedDescriptionKey: message, @"filzaErrorCode": errorCode}];
-        }
-    };
-
     if (![virtualPath isKindOfClass:NSString.class] || ![virtualPath hasPrefix:@"/"]) {
-        fail(400, @"bad_request", @"path must be an absolute virtual path like /App/Documents");
+        FilzaRemoteConsoleSetPathError(error, 400, @"bad_request", @"path must be an absolute virtual path like /App/Documents");
         return nil;
     }
 
@@ -118,17 +122,17 @@ NSString *FilzaRemoteConsoleResolveVirtualPath(NSString *virtualPath,
     for (NSString *segment in [virtualPath componentsSeparatedByString:@"/"]) {
         if (!segment.length) continue;
         if ([segment isEqualToString:@".."] || [segment isEqualToString:@"."]) {
-            fail(403, @"forbidden", @"path traversal rejected");
+            FilzaRemoteConsoleSetPathError(error, 403, @"forbidden", @"path traversal rejected");
             return nil;
         }
         if ([segment containsString:@"\\"]) {
-            fail(400, @"bad_request", @"backslash is not allowed in a virtual path");
+            FilzaRemoteConsoleSetPathError(error, 400, @"bad_request", @"backslash is not allowed in a virtual path");
             return nil;
         }
         for (NSUInteger index = 0; index < segment.length; index++) {
             unichar character = [segment characterAtIndex:index];
             if (character < 0x20 || character == 0x7F) {
-                fail(400, @"bad_request", @"control characters are not allowed in a virtual path");
+                FilzaRemoteConsoleSetPathError(error, 400, @"bad_request", @"control characters are not allowed in a virtual path");
                 return nil;
             }
         }
@@ -136,14 +140,14 @@ NSString *FilzaRemoteConsoleResolveVirtualPath(NSString *virtualPath,
     }
 
     if (!segments.count) {
-        fail(400, @"bad_request", @"path must name a root, for example /App");
+        FilzaRemoteConsoleSetPathError(error, 400, @"bad_request", @"path must name a root, for example /App");
         return nil;
     }
 
     NSString *rootName = segments.firstObject;
     NSDictionary<NSString *, id> *root = FilzaRemoteConsoleResolveRoot(rootName);
     if (!root) {
-        fail(404, @"not_found", [NSString stringWithFormat:@"unknown root \"%@\"", rootName]);
+        FilzaRemoteConsoleSetPathError(error, 404, @"not_found", [NSString stringWithFormat:@"unknown root \"%@\"", rootName]);
         return nil;
     }
     if (rootNameOut) *rootNameOut = rootName;
@@ -157,7 +161,7 @@ NSString *FilzaRemoteConsoleResolveVirtualPath(NSString *virtualPath,
     NSString *canonicalRoot = ((NSString *)root[@"path"]).stringByStandardizingPath;
     if (![canonical isEqualToString:canonicalRoot] &&
         ![canonical hasPrefix:[canonicalRoot stringByAppendingString:@"/"]]) {
-        fail(403, @"forbidden", @"resolved path escapes its root");
+        FilzaRemoteConsoleSetPathError(error, 403, @"forbidden", @"resolved path escapes its root");
         return nil;
     }
     return canonical;
@@ -238,15 +242,15 @@ static NSDictionary<NSString *, id> *FilzaRemoteConsoleEntryForAbsolutePath(NSSt
     NSDate *modified = attributes[NSFileModificationDate] ?: NSDate.date;
     NSString *name = absolutePath.lastPathComponent.length ? absolutePath.lastPathComponent : absolutePath;
 
-    NSString *virtual = FilzaRemoteConsoleVirtualPathForAbsolutePath(absolutePath);
-    if (!virtual.length) return nil;
+    NSString *virtualEntry = FilzaRemoteConsoleVirtualPathForAbsolutePath(absolutePath);
+    if (!virtualEntry.length) return nil;
 
     NSString *extension = directory ? @"" : name.pathExtension.lowercaseString;
     NSString *mime = directory ? @"inode/directory" : FilzaRemoteConsoleMimeTypeForPath(name);
 
     return @{
         @"name": name,
-        @"path": virtual,
+        @"path": virtualEntry,
         @"dir": @(directory),
         @"size": directory ? @0 : @(size),
         @"mtime": @((int64_t)(modified.timeIntervalSince1970 * 1000.0)),
@@ -526,7 +530,7 @@ static GCDWebServerResponse *FilzaRemoteConsoleHandleDownload(GCDWebServerReques
 
     NSDictionary *attributes = [fileManager attributesOfItemAtPath:absolute error:NULL];
     unsigned long long size = [attributes[NSFileSize] unsignedLongLongValue];
-    BOOL inline = FilzaRemoteConsoleIntegerParam(request, @"inline", 0) == 1;
+    BOOL inlineDisposition = FilzaRemoteConsoleIntegerParam(request, @"inline", 0) == 1;
 
     NSRange range = NSMakeRange(NSNotFound, 0);
     if (request.hasByteRange) {
@@ -541,7 +545,7 @@ static GCDWebServerResponse *FilzaRemoteConsoleHandleDownload(GCDWebServerReques
 
     GCDWebServerFileResponse *response = [GCDWebServerFileResponse responseWithFile:absolute
                                                                          byteRange:range
-                                                                      isAttachment:!inline];
+                                                                      isAttachment:!inlineDisposition];
     if (!response) {
         return FilzaRemoteConsoleErrorResponse([NSError errorWithDomain:@"FilzaRemoteConsole" code:404 userInfo:@{
             NSLocalizedDescriptionKey: @"file could not be opened", @"filzaErrorCode": @"not_found",
@@ -781,7 +785,7 @@ void FilzaRemoteConsoleInstallHandlers(void *rawServer)
     GCDWebServer *server = (__bridge GCDWebServer *)rawServer;
     if (!server) return;
 
-    // CORS preflight + ping are intentionally unauthenticated (docs/API.md §2).
+    // CORS preflight + ping are intentionally unauthenticated (docs/API.md 搂2).
     FilzaRemoteConsoleAddOpenHandler(server, @"OPTIONS", @"/.*", ^GCDWebServerResponse *(GCDWebServerRequest *request) {
         (void)request;
         GCDWebServerResponse *response = [GCDWebServerResponse responseWithStatusCode:204];
