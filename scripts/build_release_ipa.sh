@@ -35,6 +35,39 @@ DYLIB="$REPO_ROOT/.theos/obj/FilzaApplySandboxExt.dylib"
 # stage v2.4 runtime files plus the exact pre-v2.4 YouTubeKit JS resources that
 # SignatureSolver resolves from Bundle.main.
 bash "$REPO_ROOT/scripts/stage-byetunes-resources.sh" "$REPO_ROOT/.theos/byetunes-resources"
+
+# 89ce7db stopped staging the retired pre-v2.4 YouTubeKit JavaScript in
+# stage-byetunes-resources.sh, but the release IPA still has to carry it (see
+# 5b85ac8): SignatureSolver resolves these from Bundle.main at runtime. Take them
+# from the pinned YouTubeKit tree, which FilzaYouTubeKitBootstrap.mk already
+# staged during `make package` above.
+STAGED_RESOURCES="$REPO_ROOT/.theos/byetunes-resources"
+YTK_RESOURCES="$REPO_ROOT/ThirdParty/byetunes-youtubekit/Generated/Resources"
+# An array, not a string: this script runs under zsh, which does not split
+# unquoted parameter expansions into words.
+COPIED_FROM_YTK=()
+for resource in meriyah.umd.js astring.umd.js yt_ejs_helper.js; do
+  [[ -s "$STAGED_RESOURCES/$resource" ]] && continue
+  if [[ ! -s "$YTK_RESOURCES/$resource" ]]; then
+    echo "staging the pinned pre-v2.4 YouTubeKit resources" >&2
+    bash "$REPO_ROOT/scripts/stage-byetunes-youtubekit.sh" >/dev/null
+  fi
+  [[ -s "$YTK_RESOURCES/$resource" ]] || {
+    echo "pinned YouTubeKit resource unavailable: $resource" >&2
+    exit 70
+  }
+  cp "$YTK_RESOURCES/$resource" "$STAGED_RESOURCES/$resource"
+  COPIED_FROM_YTK+=("$resource")
+done
+if (( ${#COPIED_FROM_YTK[@]} )); then
+  (
+    cd "$STAGED_RESOURCES"
+    shasum -a 256 "${COPIED_FROM_YTK[@]}" >> SHA256SUMS
+    shasum -a 256 -c SHA256SUMS
+  )
+  echo "Staged pinned YouTubeKit JavaScript: ${COPIED_FROM_YTK[*]}"
+fi
+
 for resource in AppIconImage.png ByeTunes-Info.plist Config.plist meriyah.umd.js astring.umd.js yt_ejs_helper.js; do
   [[ -s "$REPO_ROOT/.theos/byetunes-resources/$resource" ]] || {
     echo "staged ByeTunes resource missing: $resource" >&2
