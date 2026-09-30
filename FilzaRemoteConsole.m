@@ -634,7 +634,9 @@ static void FilzaRemoteConsoleInstallStaticHandler(GCDWebServer *server)
         return response;
     };
 
-    [server addHandlerForMethod:@"GET" pathRegex:@"/.*" requestClass:GCDWebServerRequest.class processBlock:block];
+    // Exclude /api/ explicitly: GCDWebServer's regex handlers only need a
+    // substring match, so a bare "/.*" would swallow every API route as well.
+    [server addHandlerForMethod:@"GET" pathRegex:@"/(?!api/).*" requestClass:GCDWebServerRequest.class processBlock:block];
 }
 
 #pragma mark - Lifecycle
@@ -655,8 +657,12 @@ BOOL FilzaRemoteConsoleStart(NSError *_Nullable *_Nullable error)
     }
 
     GCDWebServer *server = [[GCDWebServer alloc] init];
-    FilzaRemoteConsoleInstallHandlers((__bridge void *)server);
+    // GCDWebServer inserts every handler at index 0 and dispatches in array
+    // order (GCDWebServerConnection.m), so the handler registered LAST is tried
+    // FIRST. Install the catch-all static handler before the API routes,
+    // otherwise it answers every /api/v1 request with its own 404.
     FilzaRemoteConsoleInstallStaticHandler(server);
+    FilzaRemoteConsoleInstallHandlers((__bridge void *)server);
 
     NSInteger port = FilzaRemoteConsoleConfiguredPort();
     NSMutableDictionary *options = [@{

@@ -182,6 +182,47 @@ def check_file(path: pathlib.Path) -> list[str]:
     return problems
 
 
+def check_handler_precedence(root: pathlib.Path) -> list[str]:
+    """Guard the GCDWebServer routing invariants the console depends on.
+
+    GCDWebServer inserts every handler at index 0 (GCDWebServer.m) and dispatches
+    in array order (GCDWebServerConnection.m), so the handler registered LAST is
+    matched FIRST. A catch-all GET handler registered after the API routes
+    answers every /api/v1 call with its own 404 -- that shipped once and left the
+    console unable to load any data, so both properties are asserted here.
+    """
+    path = root / "FilzaRemoteConsole.m"
+    if not path.exists():
+        return ["FilzaRemoteConsole.m: missing, cannot check handler precedence"]
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    problems: list[str] = []
+
+    install = text.find("FilzaRemoteConsoleInstallHandlers(")
+    static = text.find("FilzaRemoteConsoleInstallStaticHandler(server)")
+    if install == -1 or static == -1:
+        return [
+            "FilzaRemoteConsole.m: could not locate the handler installation calls "
+            "in FilzaRemoteConsoleStart"
+        ]
+    if static > install:
+        problems.append(
+            "FilzaRemoteConsole.m: the catch-all static handler is registered after "
+            "the API routes; GCDWebServer tries the last registered handler first, so "
+            "it would swallow every /api/v1 request"
+        )
+
+    match = re.search(r'pathRegex:@("(?:[^"\\]|\\.)*")', text)
+    if match is None:
+        problems.append("FilzaRemoteConsole.m: no static handler pathRegex found")
+    elif "api/" not in match.group(1):
+        problems.append(
+            "FilzaRemoteConsole.m: the static handler regex "
+            f"{match.group(1)} does not exclude 'api/'; GCDWebServer regex handlers "
+            "only need a substring match, so it would shadow the API routes"
+        )
+    return problems
+
+
 def main() -> int:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     missing = [name for name in FILES if not (root / name).exists()]
@@ -192,6 +233,7 @@ def main() -> int:
     problems: list[str] = []
     for name in FILES:
         problems.extend(check_file(root / name))
+    problems.extend(check_handler_precedence(root))
 
     if problems:
         print("check-remote-console-sources: problems found")
