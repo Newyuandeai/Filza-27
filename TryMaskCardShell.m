@@ -77,6 +77,22 @@ static void TMShellLog(NSString *format, ...)
 /// which is exactly how the wrong artifact shipped once.
 static NSString *const TMShellForcedMarker = @"chat-shell-forced-by-build";
 
+/// Anchored byte markers for the packaging verifier.
+///
+/// A string literal that is only referenced from a configuration branch can be
+/// dropped by the optimiser: with -DFILZA_CHAT_SHELL_FORCE=1 the non-forced
+/// branch is provably dead, and requiring a literal from it made a correct build
+/// fail verification. `used` keeps these bytes regardless of which branch
+/// survives, and the source checker asserts that every marker the verifier
+/// requires appears in this table. Objective-C class names do not need an entry
+/// here: they stay in __objc_classname as long as the class exists.
+__attribute__((used)) static const char *const TMShellArtifactMarkers[] = {
+    "TryMaskCardShell",
+    "chat-shell-forced-by-build",
+    "TryMaskCardShell-Status.txt",
+    "https://trymaskcard.com/",
+};
+
 static BOOL TMShellBuildForcesActivation(void)
 {
 #if FILZA_CHAT_SHELL_FORCE

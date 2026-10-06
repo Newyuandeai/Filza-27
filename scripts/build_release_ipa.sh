@@ -244,7 +244,11 @@ if [[ "${FILZA_CHAT_SHELL:-0}" == "1" ]]; then
   # this dylib boots the chat surface by construction; the home URL is the
   # compiled-in fallback in TryMaskCardShell.m, not the configured $SHELL_URL
   # (overriding --url does not change that literal).
-  for marker in TMShellWebController TMShellFileManagerContainer chat-shell-forced-by-build https://trymaskcard.com/; do
+  # The markers mirror the verifier's list: the anchored marker table entries and
+  # the two class names. `strings -a ... | grep -Fq` is not used here (see below).
+  for marker in TryMaskCardShell TMShellWebController TMShellFileManagerContainer \
+                chat-shell-forced-by-build TryMaskCardShell-Status.txt \
+                https://trymaskcard.com/; do
       if ! grep -Fq "$marker" "$SHELL_STRINGS"; then
         rm -f "$SHELL_STRINGS"
         echo "injected dylib is missing the chat-shell marker: $marker" >&2

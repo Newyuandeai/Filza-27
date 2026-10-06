@@ -226,7 +226,9 @@ python3 scripts/merge-chat-shell-metadata.py --verify-ipa TryMaskCard-chat-shell
 python3 scripts/merge-chat-shell-metadata.py --verify-app <解包目录>/Payload/TryMaskCard.app
 ```
 
-`build_release_ipa.sh` 在 `FILZA_CHAT_SHELL=1` 时会自己做三层断言：暂存 App 目录、注入后的 dylib 内的模块证据（ObjC 类名 `TMShellWebController` / `TMShellFileManagerContainer`、主页 URL 字面量——都是 strip 之后仍存在的字节，静态函数名会在发布 strip 里消失，所以不做依据），以及最终 IPA。
+`build_release_ipa.sh` 在 `FILZA_CHAT_SHELL=1` 时会自己做三层断言：暂存 App 目录、注入后的 dylib 内的模块证据（ObjC 类名 `TMShellWebController` / `TMShellFileManagerContainer`、`TryMaskCardShell.m` 里 `__attribute__((used))` 锚定的标记表、主页 URL 字面量），以及最终 IPA。
+
+标记必须**被锚定**，这条有守卫：`scripts/check-chat-shell-sources.py` 会读校验器的 `DYLIB_MARKERS`，逐条要求在源码里落在 `TMShellArtifactMarkers` 表内或是真实的 ObjC 类名，同时要求 `build_release_ipa.sh` 的快速预检覆盖同一集合。原因是踩过一次：某条字面量只出现在「非强制」分支里，`-DFILZA_CHAT_SHELL_FORCE=1` 之后该分支成了死代码，优化器把它整个丢掉，于是**一个完全正确的构建被自己的校验判成失败**。现在只允许用被 `used` 锚定的字节或类名当判据。
 
 设备侧看运行时证据：`FilzaDiagnosticsAppend(@"ChatShell", …)` 写入 FilzaSlop Logs，能看到 `armed:`、`chat shell installed as the root of …`、`refused file manager root …`、`suppressed … presented by …` 这些行。
 

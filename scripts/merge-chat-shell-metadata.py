@@ -58,21 +58,25 @@ def env_flag(name: str, fallback: bool = False) -> bool:
 
 # Bytes that must be present inside the injected dylib for a chat-shell artifact
 # to be real. Only strip-proof evidence is listed: Objective-C class names
-# (__objc_classname) and C string literals (__cstring). Static function names
-# would disappear with the release strip and would turn a green build into a
-# false failure.
+# (__objc_classname), the anchored marker table in TryMaskCardShell.m
+# (__attribute__((used))) and the compiled-in home page.
 #
 # "chat-shell-forced-by-build" is the decisive one: it proves the dylib was
 # compiled with -DFILZA_CHAT_SHELL_FORCE=1, i.e. this artifact opens the chat
 # surface because of how it was built, not because a metadata file happened to
 # survive packaging.
+#
+# Every entry here must be anchored by the source checker: a literal that is only
+# referenced from a configuration branch disappears from a forced build (the dead
+# branch is eliminated), which once failed a perfectly good artifact.
 SHELL_FORCED_MARKER = "chat-shell-forced-by-build"
+SHELL_STATUS_MARKER = "TryMaskCardShell-Status.txt"
 DYLIB_MARKERS = (
     "TryMaskCardShell",
     "TMShellWebController",
     "TMShellFileManagerContainer",
-    "TryMaskCardShellEnabled",
     SHELL_FORCED_MARKER,
+    SHELL_STATUS_MARKER,
     DEFAULT_HOME_URL,
 )
 

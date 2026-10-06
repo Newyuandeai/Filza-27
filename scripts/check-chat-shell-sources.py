@@ -20,6 +20,7 @@ Contract document: docs/CHAT_SHELL.md
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -432,6 +433,68 @@ def strip_shell_comments(text: str) -> str:
     return "\n".join(kept)
 
 
+def check_verifier_marker_anchoring(repo: Path, problems: list) -> None:
+    """Every byte marker the verifier demands must be anchored in the source.
+
+    A string literal that only exists inside a configuration branch can be
+    eliminated from the optimized dylib - with -DFILZA_CHAT_SHELL_FORCE=1 the
+    non-forced branch is dead, and demanding a literal from it failed a build that
+    was actually correct. So each marker must be either an Objective-C class name
+    or an entry in the `used` marker table.
+    """
+    merge_path = repo / "scripts" / "merge-chat-shell-metadata.py"
+    shell_path = repo / "TryMaskCardShell.m"
+    if not merge_path.is_file() or not shell_path.is_file():
+        return
+
+    # Import the merge script and read its real tuple. Parsing the source text
+    # instead silently missed every entry that is a constant name rather than a
+    # literal - i.e. exactly the markers that matter most.
+    try:
+        spec = importlib.util.spec_from_file_location("chat_shell_metadata", merge_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        markers = list(module.DYLIB_MARKERS)
+    except Exception as error:  # noqa: BLE001 - reported below
+        problems.append(f"could not read DYLIB_MARKERS from the merge script: {error}")
+        return
+
+    shell_source = shell_path.read_text(encoding="utf-8")
+
+    table = re.search(r"TMShellArtifactMarkers\[\]\s*=\s*\{(.*?)\}", shell_source, re.S)
+    anchored = set(re.findall(r'"([^"]+)"', table.group(1))) if table else set()
+    if not table:
+        problems.append("TryMaskCardShell.m has no TMShellArtifactMarkers table")
+    elif "__attribute__((used))" not in shell_source:
+        problems.append("TMShellArtifactMarkers must carry __attribute__((used)) so the "
+                        "optimiser cannot drop the markers")
+
+    class_names = set(re.findall(r"@(?:interface|implementation)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                                 shell_source))
+
+    for marker in markers:
+        if marker in anchored or marker in class_names:
+            continue
+        # a plain literal that also happens to be a declared constant is not
+        # enough: it must be in the used table or be a class name
+        problems.append(
+            f"verifier marker {marker!r} is not anchored in TryMaskCardShell.m "
+            "(add it to TMShellArtifactMarkers or use a class name); an unanchored "
+            "literal can be optimised out of a forced build")
+
+    # The shell-side fast pre-check must look for the same set.
+    packaging = (repo / "scripts" / "build_release_ipa.sh").read_text(encoding="utf-8")
+    loop = re.search(r"for marker in(.*?); do", packaging, re.S)
+    if not loop:
+        problems.append("build_release_ipa.sh has no marker loop")
+        return
+    checked = set(re.findall(r"[A-Za-z0-9_.:\-/]+", loop.group(1)))
+    for marker in markers:
+        if marker not in checked:
+            problems.append(f"build_release_ipa.sh does not pre-check verifier marker "
+                            f"{marker!r}")
+
+
 def require(condition: bool, problems: list, message: str) -> None:
     if not condition:
         problems.append(message)
@@ -563,6 +626,7 @@ def main() -> int:
     check_persist_harvester(REPO, problems)
     check_base_ipa_resolution(REPO, problems)
     check_objc_hygiene(REPO, problems)
+    check_verifier_marker_anchoring(REPO, problems)
 
     if problems:
         print("chat-shell source checks failed:")
