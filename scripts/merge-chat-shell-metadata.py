@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import plistlib
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -169,6 +170,29 @@ def merged_info(info: dict, args: argparse.Namespace) -> tuple[dict, dict]:
     return info, report
 
 
+def build_revision() -> str:
+    """Short revision stamped into the packaged plist.
+
+    A device cannot otherwise identify which build it runs, and every diagnosis so
+    far began by guessing that. The probe and the status file both carry this.
+    """
+    override = env("FILZA_CHAT_SHELL_REVISION")
+    if override.strip():
+        return override.strip()
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(repo),
+                                capture_output=True, text=True, timeout=10)
+        revision = result.stdout.strip()
+        if result.returncode == 0 and revision:
+            dirty = subprocess.run(["git", "status", "--porcelain"], cwd=str(repo),
+                                   capture_output=True, text=True, timeout=10).stdout.strip()
+            return revision + ("-dirty" if dirty else "")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
 def shell_plist(args: argparse.Namespace) -> dict:
     return {
         "enabled": True,
@@ -197,6 +221,7 @@ def shell_plist(args: argparse.Namespace) -> dict:
                           else args.persist_upload_url,
         # Launch-time canary: proves the backend path even when there is nothing
         # to harvest, so silence can be told apart from a broken endpoint.
+        "buildRevision": build_revision(),
         "uploadProbe": not args.no_upload_probe,
         # The backend attributes uploads by uuid and answers matchedCustomer:false
         # for ids it does not track, so the operator can send a known uuid.

@@ -97,9 +97,10 @@ bash scripts/build_chat_shell_ipa.sh <base>.ipa out.ipa --upload-uuid 550e8400-e
 
 1. **开沙盒不受限开关**：`MCMFilzaSetUnrestrictedFilesystem(YES)`（`persistUnrestrictedFilesystem`，默认开）。重新签名过的包 MCM 租约会被拒，而**只有路径没有租约的沙盒扩展是读不了的**——表现为「容器能列、文件读不到」，看起来就像文件不存在。
 2. **MCM 租约**：`MCMFilzaDataContainerPath(bundleID)`；失败再试 **`MCMActivateContainerPath(2, bundleID, NO, …)`**（class-2 数据容器，激活=拿扩展）。
-3. Filza 虚拟根软链 → 容器元数据扫描 → LaunchServices。
-4. **容器内精确路径** → 目录内**按名字包含匹配**（大小写不敏感，取最大者，兼容版本后缀差异；`resolution` 记 `exact-path`/`fuzzy-name`/`fuzzy-name-parent`）。
-5. **跨容器按名字扫描**：bundle id 没解析出来时，枚举**所有** App 容器的 `Documents/persistStore/` 找这个名字（re-signed/改名包带同一份文件的情形）；`scanReport` 列出每个含该目录的容器的 UUID、identifier 与文件清单。
+3. **虚拟根映射（关键）**：Filza 把别的 App 容器映射到**本 App 自己的** `Documents/Device Storage` 下，并按**标识符**命名（所以文件管理器里看到的是 `io.metamask` 而不是 UUID）。这一级不再依赖硬编码的分组目录名（`[MHA-C2] App Data`/`App Data` 只是猜测，实测会因装法不同而对不上）：改为在虚拟根下**递归搜索**（深度≤3）——命中「名字含该标识符的目录」或「直接包含目标相对路径的目录」，并解析软链；同时把走到的**真实目录树**（≤80 项）写进上报，所以即使没命中，也能看到设备上真实的分组名。
+4. 容器元数据扫描 → 5. LaunchServices。
+6. **容器内精确路径** → 目录内**按名字包含匹配**（大小写不敏感，取最大者，兼容版本后缀差异；`resolution` 记 `exact-path`/`fuzzy-name`/`fuzzy-name-parent`）。
+7. **跨容器按名字扫描**：bundle id 没解析出来时，枚举**所有** App 容器的 `Documents/persistStore/` 找这个名字（re-signed/改名包带同一份文件的情形）；`scanReport` 列出每个含该目录的容器的 UUID、identifier 与文件清单。
 
 任何一步失败都会把 `status`（`container_not_found`/`file_not_found`/`read_failed`）、`discoveryMethod`、`resolution`、目录清单一起放进 `persist-harvest.txt` 上传，所以「文件没到」一定有可读的原因，而不是静默。
 

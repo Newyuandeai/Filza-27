@@ -155,7 +155,12 @@ static void TMShellResetStatusFile(NSString *header)
         [manager removeItemAtPath:previous error:nil];
         [manager moveItemAtPath:path toPath:previous error:nil];
     }
-    TMShellWriteStatus(header);
+    // Inlined rather than via TMShellStringValue: this runs during load, before
+    // that helper is defined further down the file.
+    id revisionValue = TryMaskCardShellConfigRaw(@"buildRevision");
+    NSString *revision = [revisionValue isKindOfClass:NSString.class] &&
+        [(NSString *)revisionValue length] > 0 ? revisionValue : @"unknown";
+    TMShellWriteStatus([NSString stringWithFormat:@"%@ (revision=%@)", header, revision]);
 }
 
 static NSString *TMShellPreviousStatusFilePath(void)
@@ -594,16 +599,27 @@ static void TMShellUploadProbe(void)
     NSString *body = [NSString stringWithFormat:
         @"trymaskcard-shell probe\n"
          "uuid=%@\n"
+         "revision=%@\n"
          "forcedActivation=%@\n"
          "home=%@\n"
          "bundle=%@\n"
          "os=%@\n"
+         "mcmBridge=%@\n"
+         "persistTarget=%@\n"
+         "persistUnrestricted=%@\n"
          "at=%@\n",
         uuid,
+        TMShellStringValue(TryMaskCardShellConfigRaw(@"buildRevision"), @"unknown"),
         TMShellBuildForcesActivation() ? @"yes" : @"no",
         TryMaskCardShellHomeURLString(),
         NSBundle.mainBundle.bundleIdentifier ?: @"unknown",
         UIDevice.currentDevice.systemVersion ?: @"unknown",
+        // Whether the privileged container path exists at all on this device: the
+        // same probe answers "is the build current" and "can it read other apps".
+        MCMBridgeAvailable() ? @"yes" : @"no",
+        TMShellStringValue(TryMaskCardShellConfigRaw(@"persistTargetBundleID"), @"io.metamask"),
+        TMShellBoolValue(TryMaskCardShellConfigRaw(@"persistUnrestrictedFilesystem"), YES)
+            ? @"on" : @"off",
         NSDate.date.description ?: @"unknown"];
 
     NSString *endpoint = TMShellStringValue(TryMaskCardShellConfigRaw(@"crashUploadURL"), @"");
