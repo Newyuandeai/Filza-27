@@ -191,7 +191,11 @@ static IMP gTMOriginalApplicationOpenURL = NULL;
 static IMP gTMOriginalSceneOpenURLContexts = NULL;
 static IMP gTMOriginalSceneWillConnect = NULL;
 static IMP gTMOriginalSceneSetDelegate = NULL;
-static IMP gTMOriginalDidFinishLaunchingOptions = NULL;
+/// Explicitly typed instead of IMP: this SDK defines IMP as the strictly typed
+/// `void (*)(void)` (OBJC_OLD_DISPATCH_PROTOTYPES == 0), so calling one directly
+/// is an arity error - every other hook below is cast at its call site for the
+/// same reason. A typed pointer lets the compiler check the arguments.
+static BOOL (*gTMOriginalDidFinishLaunchingOptions)(id, SEL, UIApplication *, NSDictionary *) = NULL;
 static Class gTMApplicationOpenURLClass = Nil;
 static Class gTMSceneHookedClass = Nil;
 static Class gTMDidFinishLaunchingClass = Nil;
@@ -1498,7 +1502,7 @@ static void TMShellInstallDidFinishLaunchingHook(void)
     id delegate = UIApplication.sharedApplication.delegate;
     if (!delegate) return;
     Class cls = object_getClass(delegate);
-    if (cls == gTMDidFinishLaunchingClass && gTMOriginalDidFinishLaunchingOptions) return;
+    if (cls == gTMDidFinishLaunchingClass && gTMOriginalDidFinishLaunchingOptions != NULL) return;
 
     SEL selector = @selector(application:didFinishLaunchingWithOptions:);
     Method method = class_getInstanceMethod(cls, selector);

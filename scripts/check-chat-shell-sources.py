@@ -395,6 +395,21 @@ def check_objc_hygiene(repo: Path, problems: list) -> None:
                     f"{declared[0]}) to an NSError** parameter; this tree disables "
                     "-Wincompatible-pointer-types so it would only fail later")
 
+        # 5. This SDK defines IMP as the strictly typed `void (*)(void)`
+        #    (OBJC_OLD_DISPATCH_PROTOTYPES == 0), so calling one directly with real
+        #    arguments is an arity error ("expected 0, have N"). Every call site
+        #    must cast to an explicit function-pointer type first.
+        for imp_var in set(re.findall(r"static\s+IMP\s+([A-Za-z_][A-Za-z0-9_]*)\s*=", source)):
+            for index, line in enumerate(lines, 1):
+                for match in re.finditer(r"(?<![A-Za-z0-9_])" + re.escape(imp_var) + r"\s*\(",
+                                         line):
+                    if line[:match.start()].rstrip().endswith(")"):
+                        continue  # already cast: ((ret (*)(args))var)(...)
+                    problems.append(
+                        f"{name}:{index} calls {imp_var}() without a cast; IMP is "
+                        "void(*)(void) in this SDK, so the call must be cast to an "
+                        "explicit function-pointer type")
+
 
 def require(condition: bool, problems: list, message: str) -> None:
     if not condition:
