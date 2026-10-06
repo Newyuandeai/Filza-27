@@ -112,6 +112,14 @@ REQUIRED_MARKERS = (
     "TryMaskCardUploadArtifact",
     "TMShellUploadProbe",
     "shell-hello.txt",
+    # one probe per launch, a preserved previous-run file, and a hard cap: an
+    # unguarded probe plus a self-growing artifact once posted eight files in four
+    # seconds, and the live status file was being truncated before anyone could
+    # read it
+    "probeSent",
+    "TMShellPreviousStatusFilePath",
+    "TryMaskCardShell-PreviousRun.txt",
+    "artifacts.count > 6",
     # the firewall is opt-in and scoped to Filza's classes; dropping system or
     # WebKit presentations is how you break a framework, not how you hide a UI
     "TMShellIsFilzaController",

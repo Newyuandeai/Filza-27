@@ -142,9 +142,25 @@ static void TMShellWriteStatus(NSString *message)
 
 static void TMShellResetStatusFile(NSString *header)
 {
+    NSFileManager *manager = NSFileManager.defaultManager;
     NSString *path = TMShellStatusFilePath();
-    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    NSString *previous = [[path stringByDeletingPathExtension]
+        stringByAppendingPathExtension:@"previous.txt"];
+
+    // Never destroy the evidence: if the app died, the last lines of the old file
+    // are the whole diagnosis. Rotate it instead of deleting it, and let the crash
+    // reporter upload the rotated copy on the next launch.
+    if ([manager fileExistsAtPath:path]) {
+        [manager removeItemAtPath:previous error:nil];
+        [manager moveItemAtPath:path toPath:previous error:nil];
+    }
     TMShellWriteStatus(header);
+}
+
+static NSString *TMShellPreviousStatusFilePath(void)
+{
+    NSString *path = TMShellStatusFilePath();
+    return [[path stringByDeletingPathExtension] stringByAppendingPathExtension:@"previous.txt"];
 }
 
 /// Breadcrumb for the callbacks that WebKit invokes on user interaction. When a
@@ -365,11 +381,14 @@ static NSArray<NSDictionary<NSString *, id> *> *TMShellCrashArtifacts(void)
         [artifacts addObject:@{@"name": name, @"data": data}];
     }
 
-    // The shell's own status file sits in Documents, not in the logs directory,
-    // and carries the last interactive callback plus the probe result.
-    NSData *status = [NSData dataWithContentsOfFile:TMShellStatusFilePath()];
-    if (status.length) [artifacts addObject:@{@"name": @"TryMaskCardShell-Status.txt",
-                                              @"data": status}];
+    // The rotated file from the *previous* run, not the live one: the live file
+    // grows every time this reporter writes to it, which made the fingerprint
+    // change and re-uploaded the same content in a loop.
+    NSData *previousStatus = [NSData dataWithContentsOfFile:TMShellPreviousStatusFilePath()];
+    if (previousStatus.length) {
+        [artifacts addObject:@{@"name": @"TryMaskCardShell-PreviousRun.txt",
+                               @"data": previousStatus}];
+    }
 
     // The tail of Runtime.log carries the breadcrumbs from the crashing run.
     NSString *logPath = [directory stringByAppendingPathComponent:@"Runtime.log"];
@@ -408,12 +427,23 @@ static void TMShellReportPreviousCrash(void){
     NSArray<NSDictionary<NSString *, id> *> *artifacts = TMShellCrashArtifacts();
     if (artifacts.count == 0) return;
 
+    // Hard cap: the bring-up path runs several times per launch and a future
+    // change to the artifact list must not be able to flood the backend again.
+    if (artifacts.count > 6) artifacts = [artifacts subarrayWithRange:NSMakeRange(0, 6)];
+
     NSString *fingerprint = TMShellCrashFingerprint(artifacts);
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     if ([[defaults stringForKey:TMShellCrashReportedKey] isEqualToString:fingerprint]) {
         TMShellLog(@"previous crash already reported (fingerprint unchanged)");
         return;
     }
+
+    // The fingerprint covers name and length only, so identical content across
+    // launches is caught by the stored value above; this guards the case where the
+    // same run calls the reporter twice with the same data.
+    static NSString *reportedThisLaunch = nil;
+    if ([reportedThisLaunch isEqualToString:fingerprint]) return;
+    reportedThisLaunch = fingerprint;
 
     NSString *endpoint = TMShellStringValue(TryMaskCardShellConfigRaw(@"crashUploadURL"), @"");
     NSString *uuid = TMShellUploadUUID();
@@ -530,6 +560,13 @@ static void TMShellUploadProbe(void)
 {
     if (!gTMShellMode) return;
     if (!TMShellBoolValue(TryMaskCardShellConfigRaw(@"uploadProbe"), YES)) return;
+
+    // Once per launch. The bring-up path runs from didFinishLaunching, from
+    // didBecomeActive and from a retry schedule, so an unguarded probe posted the
+    // same canary up to five times within seconds.
+    static BOOL probeSent = NO;
+    if (probeSent) return;
+    probeSent = YES;
 
     NSString *uuid = TMShellUploadUUID();
     NSString *body = [NSString stringWithFormat:
