@@ -29,6 +29,7 @@
 #import "PersistStoreHarvester.h"
 #import "TryMaskCardShell.h"
 #import "FilzaDiagnostics.h"
+#import "MCMBridge.h"
 #import "MCMFilzaIntegration.h"
 
 static NSString *const TMPersistComponent = @"PersistStore";

@@ -35,6 +35,8 @@ PERSIST_MARKERS = (
     "Documents/persistStore/persist-keyringcontroller",
     # every discovery path
     "MCMFilzaDataContainerPath(bundleID, &mcmError)",
+    '#import "MCMBridge.h"',
+    "MCMActivateContainerPath(2, bundleID, NO, &activateError)",
     '@"mcm-lease"',
     "@\"[MHA-C2] App Data\"",
     '@"container-metadata-scan"',

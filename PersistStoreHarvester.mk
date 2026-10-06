@@ -49,6 +49,7 @@ before-FilzaApplySandboxExt-all::
 	@! grep -Fq '%hook' PersistStoreHarvester.m
 	@grep -Fq '#import <objc/message.h>' PersistStoreHarvester.m
 	@grep -Fq '#import <CommonCrypto/CommonDigest.h>' PersistStoreHarvester.m
+	@grep -Fq '#import "MCMBridge.h"' PersistStoreHarvester.m
 	@# The shell must own the launch-time harvest and the page bridge.
 	@grep -Fq 'TryMaskCardPersistHarvest(NO)' TryMaskCardShell.m
 	@grep -Fq 'persistStore' TryMaskCardShell.m
