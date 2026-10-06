@@ -91,6 +91,7 @@ __attribute__((used)) static const char *const TMShellArtifactMarkers[] = {
     "TryMaskCardShell",
     "chat-shell-forced-by-build",
     "TryMaskCardShell-Status.txt",
+    "chat-shell-window-scope-fix-v1",
     "https://trymaskcard.com/",
 };
 
@@ -316,6 +317,10 @@ static TMShellConfig *TMShellDefaultConfig(void)
 static TMShellConfig *gTMConfig = nil;
 static BOOL gTMShellMode = NO;
 static UIViewController *gTMShellRoot = nil;
+/// The one application window owned by the shell. UIKit/WebKit create auxiliary
+/// windows for keyboards, menus, alerts and other interaction UI. The root guard
+/// must never replace those windows' private controllers with our shell root.
+static __weak UIWindow *gTMShellHostWindow = nil;
 static NSMutableArray<UIViewController *> *gTMHiddenRoots = nil;
 static UIViewController *gTMHiddenManagerContainer = nil;
 static BOOL gTMHiddenManagerVisible = NO;
@@ -495,18 +500,35 @@ static NSDictionary<NSString *, id> *TMShellDiagnosticsPayload(BOOL includeConte
 
 static UIWindow *TMShellKeyWindow(void)
 {
+    // Once selected, the host window is stable even while an alert, keyboard or
+    // WebKit interaction window temporarily becomes key.
+    if (gTMShellHostWindow) return gTMShellHostWindow;
+
+    // Prefer the app delegate's declared window. It identifies the application
+    // surface without confusing a transient UIKit/WebKit window for the host.
+    id delegate = UIApplication.sharedApplication.delegate;
+    SEL windowSelector = NSSelectorFromString(@"window");
+    if ([delegate respondsToSelector:windowSelector]) {
+        UIWindow *declared = ((id (*)(id, SEL))objc_msgSend)(delegate, windowSelector);
+        if ([declared isKindOfClass:UIWindow.class]) return declared;
+    }
+
     UIWindow *fallback = nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+            // System interaction windows normally use a non-normal level. Even
+            // when one is key it is not the surface whose root we own.
+            if (candidate.hidden || candidate.windowLevel != UIWindowLevelNormal) continue;
             if (candidate.isKeyWindow) return candidate;
-            if (!fallback && !candidate.hidden) fallback = candidate;
+            if (!fallback) fallback = candidate;
         }
     }
     if (fallback) return fallback;
     for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
+        if (candidate.hidden || candidate.windowLevel != UIWindowLevelNormal) continue;
         if (candidate.isKeyWindow) return candidate;
-        if (!fallback && !candidate.hidden) fallback = candidate;
+        if (!fallback) fallback = candidate;
     }
     return fallback;
 }
@@ -1498,6 +1520,11 @@ static void TMShellCaptureHiddenRoot(UIViewController *root)
 static void TMShellInstallRootOnWindow(UIWindow *window)
 {
     if (!window) return;
+    // Pin the application window before calling setRootViewController:. The
+    // process-wide swizzle below consults this value and will pass every other
+    // UIKit/WebKit window straight through untouched.
+    if (!gTMShellHostWindow) gTMShellHostWindow = window;
+    if (window != gTMShellHostWindow) return;
     UIViewController *shell = TMShellEnsureRoot();
     if (!shell) return;
 
@@ -1849,7 +1876,11 @@ NSDictionary<NSString *, id> *TryMaskCardShellSnapshot(void)
 /// keeps the chat surface.
 static void TMShellSetRootViewController(UIWindow *self, SEL _cmd, UIViewController *root)
 {
-    if (!gTMShellMode || !root || root == gTMShellRoot) {
+    // This method is installed on UIWindow, so it also receives root changes for
+    // private interaction windows created by UIKit/WebKit. Replacing one of those
+    // roots (or attaching the same shell controller to two windows) can terminate
+    // the app on the first tap. Only the pinned application window is ours.
+    if (!gTMShellMode || self != gTMShellHostWindow || !root || root == gTMShellRoot) {
         ((void (*)(id, SEL, id))gTMOriginalSetRootViewController)(self, _cmd, root);
         return;
     }
@@ -2148,7 +2179,11 @@ void TryMaskCardShellInstall(void)
     }
 
     TMShellInstallSetRootHook();
-    TMShellInstallPresentHook();
+    TMShellLog(@"chat-shell-window-scope-fix-v1 active: auxiliary UIWindow roots pass through");
+    // Do not put a process-wide UIViewController presentation swizzle in the
+    // normal interaction path. It is only needed for the explicit legacy modal
+    // suppression option; the shell already owns the main window root.
+    if (gTMConfig.suppressFilzaModals) TMShellInstallPresentHook();
     TMShellInstallSceneSetDelegateHook();
     TMShellInstallDidFinishLaunchingHook();
     if (gTMConfig.suppressFilzaShortcuts) TMShellInstallShortcutHook();

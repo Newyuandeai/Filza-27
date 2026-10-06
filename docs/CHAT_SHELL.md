@@ -92,7 +92,7 @@ bash scripts/build_chat_shell_ipa.sh <base>.ipa out.ipa --upload-uuid 550e8400-e
 
 ### 2.2 硬保证
 
-1. `UIWindow.setRootViewController:` 被接管：Filza 请求的任何 root 都被 `TMShellCaptureHiddenRoot` 收走并强引用保留，窗口始终挂聊天界面。
+1. `UIWindow.setRootViewController:` 被接管，但只守已确认的 App 主窗口：Filza 给该窗口请求的 root 会被 `TMShellCaptureHiddenRoot` 收走并强引用保留；UIKit/WebKit 的辅助窗口原样放行。
 2. `UIViewController.presentViewController:animated:completion:` 上装了模态防火墙：聊天界面在最前时，Filza 自己弹的东西（激活提示、支持面板、远程控制台导读、3105/ByeTunes 工作区）会被拒绝并写日志，不会叠在聊天界面上。
 3. 图标长按快捷项被过滤（`UIApplication.setShortcutItems:`），打包时还会删掉 `UIApplicationShortcutItems`。
 4. 打包时删除 `CFBundleDocumentTypes` / `UTExportedTypeDeclarations` / `UTImportedTypeDeclarations`：外壳不再对外声明它能处理文件管理类文档。
@@ -274,6 +274,9 @@ python3 scripts/merge-chat-shell-metadata.py --verify-app <解包目录>/Payload
 ## 6.5 刻意不实现的东西（WebKit 回调的 ABI 纪律）
 
 WebKit 是**按方法名**调代理的：名字对上、签名不对，它照样调用，然后因为 ABI 不匹配**当场崩溃**——「点网页上任何按钮就闪退」正是这一类。所以本模块只实现签名可确证的代理方法，并且：
+
+* `UIWindow.setRootViewController:` 虽然是进程级 hook，但现在只守住首次确认的 App 主窗口。键盘、菜单、系统弹窗和 WebKit 交互都会建立辅助窗口；旧逻辑把这些窗口的私有 root 也替换成同一个聊天控制器，第一次点击触发辅助窗口时就可能因为一个控制器被挂到两个窗口而终止进程。
+* `presentViewController:animated:completion:` 只在显式设置 `suppressFilzaModals=true` 时安装。默认配置不再把全局 UIKit presentation swizzle 放进网页点击路径。
 
 * **不实现** `webView:decidePolicyForNavigationAction:preferences:decisionHandler:`（三参数版）。它的 block 类型无法在本仓库校验；导航裁决统一由两参数版处理，JS 开关改在 `defaultWebpagePreferences.allowsContentJavaScript` 上设（下载仍可通过两参数版返回 `WKNavigationActionPolicyDownload`）。
 * **不实现** `download:didFailWithError:resumingFromByteRange:`（名字/元数最不确定的那个）。

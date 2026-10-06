@@ -77,6 +77,7 @@ DYLIB_MARKERS = (
     "TMShellFileManagerContainer",
     SHELL_FORCED_MARKER,
     SHELL_STATUS_MARKER,
+    "chat-shell-window-scope-fix-v1",
     DEFAULT_HOME_URL,
 )
 

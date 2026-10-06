@@ -646,6 +646,19 @@ def main() -> int:
             "the Filza modal firewall must default to off (suppressFilzaModals = NO)")
     require("TMShellIsFilzaController(presented)" in shell_source, problems,
             "the firewall must be scoped to Filza's own controller classes")
+    require("if (gTMConfig.suppressFilzaModals) TMShellInstallPresentHook();" in shell_source,
+            problems, "the process-wide presentation hook must only be installed when the "
+                      "legacy modal firewall is explicitly enabled")
+
+    # UIWindow is also used for keyboards, menus, alerts and WebKit interaction
+    # surfaces. The global root swizzle may only police the one pinned app window;
+    # forcing the shell controller into an auxiliary window crashes on first tap.
+    require("static __weak UIWindow *gTMShellHostWindow" in shell_source, problems,
+            "the shell must pin its one application host window")
+    require("if (!gTMShellHostWindow) gTMShellHostWindow = window;" in shell_source,
+            problems, "the app window must be pinned before the root swizzle is invoked")
+    require("self != gTMShellHostWindow" in shell_source, problems,
+            "the UIWindow root guard must pass auxiliary UIKit/WebKit windows through")
 
     check_balance(shell_m, shell_source, problems)
 

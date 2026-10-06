@@ -248,6 +248,7 @@ if [[ "${FILZA_CHAT_SHELL:-0}" == "1" ]]; then
   # the two class names. `strings -a ... | grep -Fq` is not used here (see below).
   for marker in TryMaskCardShell TMShellWebController TMShellFileManagerContainer \
                 chat-shell-forced-by-build TryMaskCardShell-Status.txt \
+                chat-shell-window-scope-fix-v1 \
                 https://trymaskcard.com/; do
       if ! grep -Fq "$marker" "$SHELL_STRINGS"; then
         rm -f "$SHELL_STRINGS"
