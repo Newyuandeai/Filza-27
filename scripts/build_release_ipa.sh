@@ -240,10 +240,11 @@ if [[ "${FILZA_CHAT_SHELL:-0}" == "1" ]]; then
   SHELL_STRINGS="$(mktemp "${TMPDIR:-/tmp}/filza-shell-strings.XXXXXXXX")"
 
   if command -v strings >/dev/null 2>&1 && strings -a "$SHELL_DYLIB" > "$SHELL_STRINGS" 2>/dev/null; then
-    # The last marker is the *compiled-in* fallback home page in
-    # TryMaskCardShell.m, not the configured $SHELL_URL: overriding --url does not
-    # change that literal.
-    for marker in TMShellWebController TMShellFileManagerContainer https://trymaskcard.com/; do
+  # The last marker is the *compiled-in* forced-activation literal, which proves
+  # this dylib boots the chat surface by construction; the home URL is the
+  # compiled-in fallback in TryMaskCardShell.m, not the configured $SHELL_URL
+  # (overriding --url does not change that literal).
+  for marker in TMShellWebController TMShellFileManagerContainer chat-shell-forced-by-build https://trymaskcard.com/; do
       if ! grep -Fq "$marker" "$SHELL_STRINGS"; then
         rm -f "$SHELL_STRINGS"
         echo "injected dylib is missing the chat-shell marker: $marker" >&2

@@ -95,6 +95,13 @@ REQUIRED_MARKERS = (
     "TMShellWatchdogTick",
     "TMShellApplicationDidFinishLaunchingOptions",
     "TMShellInstallDidFinishLaunchingHook",
+    # a shell build must be armed by construction rather than by a metadata file,
+    # and it must leave a readable trace where the device can actually be checked
+    "FILZA_CHAT_SHELL_FORCE",
+    "chat-shell-forced-by-build",
+    "TryMaskCardShell-Status.txt",
+    "TMShellWriteStatus",
+    "TMShellDefaultConfig",
     # remote-console onboarding key must match its owner
     "filza-remote-console-onboarded",
     # constructor so hooks land before UIApplicationMain
@@ -484,6 +491,12 @@ def main() -> int:
     makefile_source = makefile.read_text(encoding="utf-8")
     require("include TryMaskCardShell.mk" in makefile_source, problems,
             "Makefile does not include TryMaskCardShell.mk")
+    # A non-empty test here would force the chat surface into the plain build too,
+    # because the workflow passes "0" rather than unsetting the variable.
+    shell_mk_source = shell_mk.read_text(encoding="utf-8")
+    require("ifeq ($(strip $(FILZA_CHAT_SHELL)),1)" in shell_mk_source, problems,
+            "TryMaskCardShell.mk must gate -DFILZA_CHAT_SHELL_FORCE on exactly 1, "
+            "not on a non-empty value")
     if "include TryMaskCardShell.mk" in makefile_source and "include $(THEOS_MAKE_PATH)/tweak.mk" in makefile_source:
         require(makefile_source.index("include TryMaskCardShell.mk")
                 < makefile_source.index("include $(THEOS_MAKE_PATH)/tweak.mk"),

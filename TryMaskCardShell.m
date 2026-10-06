@@ -65,6 +65,71 @@ static void TMShellLog(NSString *format, ...)
     FilzaDiagnosticsAppend(TMShellDiagnosticsComponent, message);
 }
 
+#pragma mark - Build-time activation + on-device status file
+
+#ifndef FILZA_CHAT_SHELL_FORCE
+#define FILZA_CHAT_SHELL_FORCE 0
+#endif
+
+/// Literal that stays in the binary of a forced shell build, so a packaged
+/// artifact can be identified by its bytes alone (the verifier requires it).
+/// Without it, a shell build and a plain build differ only by a metadata file,
+/// which is exactly how the wrong artifact shipped once.
+static NSString *const TMShellForcedMarker = @"chat-shell-forced-by-build";
+
+static BOOL TMShellBuildForcesActivation(void)
+{
+#if FILZA_CHAT_SHELL_FORCE
+    return YES;
+#else
+    return NO;
+#endif
+}
+
+/// Human-readable status next to the app's own Documents, because the shipped
+/// failure mode ("the file manager opened") is only diagnosable on the device,
+/// and the file manager is what is on screen. Mirrors the repo's status-file
+/// convention (WebDAVStatus.txt / SSHStatus.txt).
+static NSString *TMShellStatusFilePath(void)
+{
+    NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                                               NSUserDomainMask, YES).firstObject;
+    if (documents.length == 0) documents = NSTemporaryDirectory();
+    return [documents stringByAppendingPathComponent:@"TryMaskCardShell-Status.txt"];
+}
+
+static void TMShellWriteStatus(NSString *message)
+{
+    static NSISO8601DateFormatter *formatter = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ formatter = [NSISO8601DateFormatter new]; });
+
+    NSString *line = [NSString stringWithFormat:@"%@ | %@\n",
+                      [formatter stringFromDate:NSDate.date] ?: NSDate.date.description,
+                      message ?: @"(empty)"];
+    NSString *path = TMShellStatusFilePath();
+    NSFileManager *manager = NSFileManager.defaultManager;
+    if (![manager fileExistsAtPath:path]) [manager createFileAtPath:path contents:nil attributes:nil];
+
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!handle) return;
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle synchronizeFile];
+        [handle closeFile];
+    } @catch (__unused NSException *exception) {
+        @try { [handle closeFile]; } @catch (__unused NSException *ignored) {}
+    }
+}
+
+static void TMShellResetStatusFile(NSString *header)
+{
+    NSString *path = TMShellStatusFilePath();
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    TMShellWriteStatus(header);
+}
+
 #pragma mark - Configuration
 
 /// Parsed copy of the packaged TryMaskCardShell.plist, shared with the modules
@@ -130,24 +195,16 @@ static NSURL *TMShellConfigURL(void)
     return [NSBundle.mainBundle URLForResource:TMShellConfigResource withExtension:@"plist"];
 }
 
-static TMShellConfig *TMShellLoadConfig(void)
+/// Apply the documented defaults to a config object. Shared by the plist loader
+/// and by the forced-activation build path, which must keep working even when the
+/// packaged plist is missing.
+static void TMShellApplyConfigDefaults(TMShellConfig *config, NSDictionary *raw)
 {
-    NSURL *url = TMShellConfigURL();
-    if (!url) return nil;
-
-    NSDictionary *raw = [NSDictionary dictionaryWithContentsOfURL:url];
-    if (![raw isKindOfClass:NSDictionary.class]) {
-        TMShellLog(@"configuration plist is not a dictionary: %@", url.path);
-        return nil;
-    }
-    gTMRawConfig = raw;
-
-    TMShellConfig *config = [TMShellConfig new];
     config.homeURLString = TMShellStringValue(raw[@"homeURL"], @"https://trymaskcard.com/");
     config.userAgentSuffix = TMShellStringValue(raw[@"userAgentSuffix"], @"TryMaskCardShell/1.0");
     config.urlScheme = [TMShellStringValue(raw[@"urlScheme"], @"trymaskcard") lowercaseString];
     config.bridgeCommands = TMShellArrayValue(raw[@"bridgeCommands"],
-        @[@"info", @"pairingURL", @"saveFile"]);
+        @[@"info", @"pairingURL", @"saveFile", @"persistStore"]);
     config.externalSchemes = TMShellArrayValue(raw[@"externalSchemes"],
         @[@"tel", @"mailto", @"sms", @"weixin", @"alipay", @"mqqapi", @"itms-apps",
           @"itms-services", @"maps", @"whatsapp", @"line"]);
@@ -170,6 +227,32 @@ static TMShellConfig *TMShellLoadConfig(void)
     config.enableWebDAV = TMShellBoolValue(raw[@"enableWebDAV"], NO);
     config.autoReturnSeconds = MAX((NSInteger)0, TMShellIntegerValue(raw[@"autoReturnSeconds"], 0));
     config.homeRetryCount = MAX((NSInteger)0, TMShellIntegerValue(raw[@"homeRetryCount"], 3));
+}
+
+static TMShellConfig *TMShellLoadConfig(void)
+{
+    NSURL *url = TMShellConfigURL();
+    if (!url) return nil;
+
+    NSDictionary *raw = [NSDictionary dictionaryWithContentsOfURL:url];
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        TMShellLog(@"configuration plist is not a dictionary: %@", url.path);
+        return nil;
+    }
+    gTMRawConfig = raw;
+
+    TMShellConfig *config = [TMShellConfig new];
+    TMShellApplyConfigDefaults(config, raw);
+    return config;
+}
+
+/// Defaults-only config: used when the build forces activation but no plist was
+/// packaged, so the shell still boots the chat surface with sane settings
+/// instead of silently degrading into the file manager.
+static TMShellConfig *TMShellDefaultConfig(void)
+{
+    TMShellConfig *config = [TMShellConfig new];
+    TMShellApplyConfigDefaults(config, @{});
     return config;
 }
 
@@ -1091,6 +1174,8 @@ static void TMShellInstallRootOnWindow(UIWindow *window)
         window.rootViewController = shell;
     }
     TMShellLog(@"chat shell installed as the root of %@", NSStringFromClass(window.class));
+    TMShellWriteStatus([NSString stringWithFormat:@"installed chat surface as the root of %@",
+                        NSStringFromClass(window.class)]);
 }
 
 static void TMShellAssertRootSchedule(void);
@@ -1130,6 +1215,10 @@ static void TMShellWatchdogTick(void)
     if (window.rootViewController != gTMShellRoot) {
         TMShellLog(@"watchdog attempt %lu: chat surface is not the window root; re-installing",
                    (unsigned long)gTMShellWatchdogAttempts);
+        TMShellWriteStatus([NSString stringWithFormat:
+            @"watchdog %lu: root was %@, re-installing the chat surface",
+            (unsigned long)gTMShellWatchdogAttempts,
+            NSStringFromClass(window.rootViewController.class) ?: @"nil"]);
         gTMShellRootConfirmed = NO;
         TMShellInstallRootOnWindow(window);
         TMShellAssertRootSchedule();
@@ -1139,6 +1228,9 @@ static void TMShellWatchdogTick(void)
         gTMShellRootConfirmed = YES;
         TMShellLog(@"watchdog attempt %lu: chat surface confirmed as the root of %@",
                    (unsigned long)gTMShellWatchdogAttempts, NSStringFromClass(window.class));
+        TMShellWriteStatus([NSString stringWithFormat:
+            @"watchdog %lu: chat surface confirmed as the root of %@",
+            (unsigned long)gTMShellWatchdogAttempts, NSStringFromClass(window.class)]);
     }
     TMShellAssertRootSchedule();
 }
@@ -1423,6 +1515,8 @@ static void TMShellSetRootViewController(UIWindow *self, SEL _cmd, UIViewControl
     TMShellCaptureHiddenRoot(root);
     TMShellLog(@"refused file manager root %@ on %@; chat surface stays root",
                NSStringFromClass(root.class), NSStringFromClass(self.class));
+    TMShellWriteStatus([NSString stringWithFormat:@"refused file manager root %@ on %@",
+                        NSStringFromClass(root.class), NSStringFromClass(self.class)]);
     ((void (*)(id, SEL, id))gTMOriginalSetRootViewController)(self, _cmd, TMShellEnsureRoot());
 }
 
@@ -1729,13 +1823,40 @@ __attribute__((constructor)) static void TryMaskCardShellInit(void)
 {
     @autoreleasepool {
         gTMHiddenRoots = [NSMutableArray array];
+
+        BOOL forced = TMShellBuildForcesActivation();
         gTMConfig = TMShellLoadConfig();
+        NSString *configSource = gTMConfig != nil
+            ? (TMShellConfigURL().path ?: @"(bundled default)")
+            : @"(missing TryMaskCardShell.plist)";
+
+        TMShellResetStatusFile(@"TryMaskCardShell launch");
+        TMShellWriteStatus([NSString stringWithFormat:
+            @"build forces activation=%@, config=%@, home=%@",
+            forced ? @"yes" : @"no", configSource,
+            gTMConfig.homeURLString ?: [TMShellDefaultConfig() homeURLString]]);
 
         gTMShellMode = NO;
-        if (gTMConfig && gTMConfig.enabled) {
+        if (forced) {
+            // A shell build is armed by construction: the packaged plist only
+            // tunes it. This removes the failure mode where the right dylib ships
+            // with a missing/inert plist and the app opens the file manager.
+            if (!gTMConfig) gTMConfig = TMShellDefaultConfig();
+            gTMShellMode = YES;
+            TMShellLog(@"%@: forced activation for this build", TMShellForcedMarker);
+            TMShellWriteStatus(@"armed: forced activation for this build");
+        } else if (gTMConfig && gTMConfig.enabled) {
             NSNumber *override = [NSUserDefaults.standardUserDefaults
                 objectForKey:TMShellEnabledDefaultsKey];
             gTMShellMode = override ? override.boolValue : YES;
+        }
+
+        if (!gTMShellMode) {
+            TMShellLog(@"inactive: %@", gTMConfig == nil
+                       ? @"no TryMaskCardShell.plist in the app bundle"
+                       : @"disabled by configuration");
+            TMShellWriteStatus(@"inactive: this build is the plain file-manager build "
+                               "(no shell plist and no forced activation)");
         }
 
         // Hooks install during dylib load, before UIApplicationMain, so no

@@ -32,11 +32,29 @@
 
 ### 2.1 激活方式
 
-**打包产物里有没有 `TryMaskCardShell.plist` 就是开关**，不是编译期常量：
+激活由**构建方式**决定，plist 只负责调参：
 
-* 文件在 → 外壳接管主界面；
-* 文件不在 → 模块完全惰性，普通 Filza-27 发布路径的行为一字不改；
-* 设备上调试时可用 `NSUserDefaults` 键 `TryMaskCardShellEnabled` 临时覆盖。
+* **外壳包**（`FILZA_CHAT_SHELL=1` 打包）在编译期带上 `-DFILZA_CHAT_SHELL_FORCE=1`，dylib 里因此存在字面量 `chat-shell-forced-by-build` → 装了它就一定开聊天面，**不依赖任何元数据文件**；`--verify-ipa` 也把这条字面量当作硬性标记，缺了就拒绝出包。
+* 包里的 `TryMaskCardShell.plist` 用来调主页 URL、通道开关、隐藏入口等；它缺失时走内置默认值（`TMShellDefaultConfig`），仍开聊天面。
+* **普通包**（`FILZA_CHAT_SHELL` 未设或为 `0`）保持 plist 门控：没有 plist 就是原来的文件管理器行为。
+* 设备上调试可用 `NSUserDefaults` 键 `TryMaskCardShellEnabled` 覆盖。
+
+> 之前两种包只差一个元数据文件，一旦装错就表现为「打开还是文件管理器」且难以分辨。现在两者在二进制层面就不同，装错模式会在打包校验阶段被直接拦下。
+
+### 2.1.1 设备上的自检文件
+
+每次启动都会写 `Documents/TryMaskCardShell-Status.txt`（纯文本，逐行带时间戳），文件管理器打开时可以直接进去看：
+
+```
+2026-… | TryMaskCardShell launch
+2026-… | build forces activation=yes, config=/…/TryMaskCardShell.plist, home=https://trymaskcard.com/
+2026-… | armed: forced activation for this build
+2026-… | refused file manager root TGFileBrowserController on UIWindow
+2026-… | installed chat surface as the root of UIWindow
+2026-… | watchdog 1: chat surface confirmed as the root of UIWindow
+```
+
+读法：`forces activation=no` 说明装的是普通包；`armed` 之后若没有 `installed chat surface as the root of`，就是启动时序问题（看门狗那几行会写明当时窗口根是谁）；`FilzaSlop Logs/Runtime.log` 里 `ChatShell` 组件有同样的内容。
 
 ### 2.2 硬保证
 

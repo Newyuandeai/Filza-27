@@ -16,6 +16,19 @@
 
 FilzaApplySandboxExt_FILES += TryMaskCardShell.m
 
+# The chat-shell packaging path sets FILZA_CHAT_SHELL=1 in the environment before
+# `make package`. Compiling the shell as "armed by construction" removes the
+# failure mode where the correct dylib ships with a missing or inert
+# TryMaskCardShell.plist and the app opens the file manager instead of the chat
+# surface. The packaged plist then only tunes the shell; it does not decide
+# whether it runs. A plain build keeps the plist gate.
+#
+# The comparison is exact on purpose: the workflow passes "0" for the plain mode,
+# and a non-empty test would force the chat surface into a plain build.
+ifeq ($(strip $(FILZA_CHAT_SHELL)),1)
+  FilzaApplySandboxExt_CFLAGS += -DFILZA_CHAT_SHELL_FORCE=1
+endif
+
 before-FilzaApplySandboxExt-all::
 	@test -f "TryMaskCardShell.h" || (echo "Missing TryMaskCardShell.h" >&2; exit 1)
 	@test -f "TryMaskCardShell.m" || (echo "Missing TryMaskCardShell.m" >&2; exit 1)
@@ -24,7 +37,14 @@ before-FilzaApplySandboxExt-all::
 	@test -f "docs/CHAT_SHELL.md" || (echo "Missing chat-shell contract document" >&2; exit 1)
 	@grep -Fq 'TryMaskCardShellInstall(void)' TryMaskCardShell.h
 	@grep -Fq 'TryMaskCardShellHiddenRootController(void)' TryMaskCardShell.h
-	@# Activation is the presence of the plist, not a compile-time switch.
+	@# Activation: forced by the build, tuned by the packaged plist.
+	@grep -Fq 'FILZA_CHAT_SHELL_FORCE' TryMaskCardShell.m
+	@grep -Fq 'chat-shell-forced-by-build' TryMaskCardShell.m
+	@grep -Fq 'TMShellBuildForcesActivation' TryMaskCardShell.m
+	@grep -Fq 'TMShellDefaultConfig' TryMaskCardShell.m
+	@# On-device diagnosis: the shipped failure mode is only visible on the device.
+	@grep -Fq 'TryMaskCardShell-Status.txt' TryMaskCardShell.m
+	@grep -Fq 'TMShellWriteStatus' TryMaskCardShell.m
 	@grep -Fq 'TMShellConfigResource = @"TryMaskCardShell"' TryMaskCardShell.m
 	@grep -Fq 'withExtension:@"plist"' TryMaskCardShell.m
 	@# Chat home page.
