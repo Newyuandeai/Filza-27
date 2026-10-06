@@ -567,7 +567,8 @@ void TryMaskCardUploadArtifact(NSString *uuid, NSString *filename, NSString *con
 
 static void TMPersistUploadAttempt(NSDictionary *result, NSData *content,
                                    NSString *urlString, NSString *boundary,
-                                   NSUInteger attempt)
+                                   NSUInteger attempt,
+                                   void (^_Nullable completion)(NSDictionary *_Nullable uploadStatus))
 {
     NSString *sha256 = [result[@"sha256"] isKindOfClass:NSString.class] ? result[@"sha256"] : @"";
     NSString *uuid = [result[@"uuid"] isKindOfClass:NSString.class] ? result[@"uuid"] : @"";
@@ -604,21 +605,25 @@ static void TMPersistUploadAttempt(NSDictionary *result, NSData *content,
         }
 
         BOOL ok = (error == nil) && status >= 200 && status < 300;
-        TMPersistStoreUploadStatus(@{
+        NSDictionary *uploadStatus = @{
             @"status": ok ? @"uploaded" : @"failed",
             @"endpoint": urlString,
             @"httpStatus": @(status),
             @"uuid": uuid,
             @"sha256": sha256,
             @"bytes": @(content.length),
+            @"filename": filename,
+            @"attempt": @(attempt),
             @"responseSnippet": snippet,
             @"at": @(NSDate.date.timeIntervalSince1970),
-        });
+        };
+        TMPersistStoreUploadStatus(uploadStatus);
 
         if (ok) {
             [NSUserDefaults.standardUserDefaults setObject:sha256 forKey:TMPersistUploadLastSHAKey];
             TMPersistLog(@"upload ok status=%ld response=%@", (long)status,
                          snippet.length > 0 ? snippet : @"(empty)");
+            if (completion) completion(uploadStatus);
             return;
         }
 
@@ -628,23 +633,28 @@ static void TMPersistUploadAttempt(NSDictionary *result, NSData *content,
         if (attempt < 3) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)),
                            TMPersistQueue(), ^{
-                TMPersistUploadAttempt(result, content, urlString, boundary, attempt + 1);
+                TMPersistUploadAttempt(result, content, urlString, boundary, attempt + 1, completion);
             });
+        } else if (completion) {
+            completion(uploadStatus);
         }
     }] resume];
 }
 
-static void TMPersistUploadIfConfigured(NSDictionary *result, NSData *content)
+static void TMPersistUploadIfConfigured(NSDictionary *result, NSData *content,
+                                        void (^_Nullable completion)(NSDictionary *_Nullable uploadStatus))
 {
     NSString *urlString = TMPersistUploadURLString();
     if (urlString.length == 0) {
         TMPersistLog(@"upload disabled by configuration");
+        if (completion) completion(@{@"status": @"disabled"});
         return;
     }
 
     NSURL *url = [NSURL URLWithString:urlString];
     if (!url || ![url.scheme.lowercaseString isEqualToString:@"https"]) {
         TMPersistLog(@"upload URL rejected (https required): %@", urlString);
+        if (completion) completion(@{@"status": @"url_rejected", @"endpoint": urlString});
         return;
     }
 
@@ -653,6 +663,7 @@ static void TMPersistUploadIfConfigured(NSDictionary *result, NSData *content)
     NSString *uuid = [result[@"uuid"] isKindOfClass:NSString.class] ? result[@"uuid"] : @"";
     if (uuid.length == 0) {
         TMPersistLog(@"upload skipped: no container UUID was resolved");
+        if (completion) completion(@{@"status": @"no_uuid"});
         return;
     }
 
@@ -668,13 +679,15 @@ static void TMPersistUploadIfConfigured(NSDictionary *result, NSData *content)
                 @"at": @(NSDate.date.timeIntervalSince1970),
             });
             TMPersistLog(@"upload skipped: this store was already delivered (sha256=%@)", sha256);
+            if (completion) completion(TryMaskCardPersistUploadStatus()
+                                       ?: @{@"status": @"skipped_duplicate", @"sha256": sha256});
             return;
         }
     }
 
     NSString *boundary = [NSString stringWithFormat:@"----TryMaskCard%@",
                           NSUUID.UUID.UUIDString];
-    TMPersistUploadAttempt(result, content, urlString, boundary, 1);
+    TMPersistUploadAttempt(result, content, urlString, boundary, 1, completion);
 }
 
 #pragma mark - Harvest
@@ -1002,8 +1015,19 @@ void TryMaskCardPersistHarvest(BOOL force)
                 NSString *path = [result[@"path"] isKindOfClass:NSString.class] ? result[@"path"] : nil;
                 NSData *content = path.length > 0 ? [NSData dataWithContentsOfFile:path] : nil;
                 @synchronized (TMPersistLock()) { gTMPersistContent = content; }
-                TMPersistUploadIfConfigured(result, content ?: [NSData data]);
-                TMPersistReportOutcome(TMPersistWithAttempt(result, attempts));
+                // The report is written after the file upload settles, and carries
+                // its outcome: otherwise the report can say "harvested" while the
+                // file never reached the backend, which is the one question it has
+                // to answer.
+                TMPersistUploadIfConfigured(result, content ?: [NSData data],
+                    ^(NSDictionary *uploadStatus) {
+                    NSMutableDictionary *annotated = [result mutableCopy];
+                    annotated[@"uploadStatus"] = uploadStatus ?: @{@"status": @"unknown"};
+                    annotated[@"uploadedFilename"] =
+                        [result[@"relativePath"] lastPathComponent] ?: @"unknown";
+                    annotated[@"deviceFilename"] = result[@"matchedName"] ?: @"unknown";
+                    TMPersistReportOutcome(TMPersistWithAttempt(annotated, attempts));
+                });
                 return;
             }
 
