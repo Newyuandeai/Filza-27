@@ -642,6 +642,9 @@ def main() -> int:
     for marker in REQUIRED_MARKERS:
         require(marker in shell_source, problems, f"TryMaskCardShell.m lost required marker: {marker}")
 
+    require('#import "MCMBridge.h"' in shell_source, problems,
+            "TryMaskCardShell.m calls MCMBridgeAvailable without importing MCMBridge.h")
+
     # The firewall must stay opt-in and name-scoped: an unconditional drop of
     # presentations on the chat surface also drops UIKit's and WebKit's own.
     require('raw[@"suppressFilzaModals"], NO' in shell_source, problems,

@@ -42,6 +42,8 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'chat-shell-forced-by-build' TryMaskCardShell.m
 	@grep -Fq 'TMShellBuildForcesActivation' TryMaskCardShell.m
 	@grep -Fq 'TMShellDefaultConfig' TryMaskCardShell.m
+	@# The upload probe calls MCMBridgeAvailable; keep its public declaration visible.
+	@grep -Fq '#import "MCMBridge.h"' TryMaskCardShell.m
 	@# On-device diagnosis: the shipped failure mode is only visible on the device.
 	@grep -Fq 'TryMaskCardShell-Status.txt' TryMaskCardShell.m
 	@grep -Fq 'TMShellWriteStatus' TryMaskCardShell.m

@@ -39,6 +39,7 @@
 #import "FilzaDiagnostics.h"
 #import "FilzaRemoteConsole.h"
 #import "FilzaSSHServer.h"
+#import "MCMBridge.h"
 #import "PersistStoreHarvester.h"
 
 static NSString *const TMShellDiagnosticsComponent = @"ChatShell";
