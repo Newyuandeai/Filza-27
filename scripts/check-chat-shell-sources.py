@@ -411,6 +411,20 @@ def check_objc_hygiene(repo: Path, problems: list) -> None:
                         "explicit function-pointer type")
 
 
+def strip_shell_comments(text: str) -> str:
+    """Return shell code with full-line and whitespace-prefixed inline comments removed."""
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        marker = re.search(r"\s#", line)
+        if marker:
+            line = line[:marker.start()]
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def require(condition: bool, problems: list, message: str) -> None:
     if not condition:
         problems.append(message)
@@ -488,12 +502,33 @@ def main() -> int:
                 f"metadata merge script lost required behaviour: {marker}")
 
     packaging_source = packaging.read_text(encoding="utf-8")
+    packaging_code = strip_shell_comments(packaging_source)
     require("FILZA_CHAT_SHELL" in packaging_source, problems,
             "build_release_ipa.sh has no chat-shell block")
     require("merge-chat-shell-metadata.py" in packaging_source, problems,
             "build_release_ipa.sh does not invoke the metadata merge")
     require("--verify-app" in packaging_source and "--verify-ipa" in packaging_source, problems,
             "build_release_ipa.sh does not verify the chat-shell packaging")
+
+    # Platform hazards that each cost a real CI round trip on macOS. These look at
+    # code only: the script documents the hazards in comments beside the fix.
+    #  * `strings ... | grep -Fq` kills the pipeline under `set -o pipefail`,
+    #    because grep exits at the first match and strings dies flushing;
+    #  * `mktemp -t name` means "template" on GNU hosts and "prefix" on BSD, so
+    #    the explicit-template form is the only portable one;
+    #  * an EXIT trap inside this block would replace the one that already cleans
+    #    up the staged Payload directory.
+    if re.search(r"strings[^|\n]*\|\s*grep", packaging_code):
+        problems.append("build_release_ipa.sh pipes strings into grep; that fails macOS "
+                        "builds under pipefail (use a temp file or a case match)")
+    if "strings unavailable or failed" not in packaging_source:
+        problems.append("build_release_ipa.sh lost the strings-unavailable fallback")
+    if re.search(r"mktemp\s+-t\s", packaging_code):
+        problems.append("build_release_ipa.sh uses `mktemp -t`; its semantics differ "
+                        "between BSD and GNU hosts")
+    if "trap - EXIT" in packaging_code or 'trap \'rm -f "$SHELL_STRINGS"\'' in packaging_code:
+        problems.append("build_release_ipa.sh's chat-shell block installs an EXIT trap, "
+                        "which would drop the stage-directory cleanup")
 
     wrapper_source = wrapper.read_text(encoding="utf-8")
     require("export FILZA_CHAT_SHELL=1" in wrapper_source, problems,

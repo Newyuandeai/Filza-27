@@ -213,27 +213,48 @@ if [[ "${FILZA_CHAT_SHELL:-0}" == "1" ]]; then
     echo "chat-shell display name was not applied" >&2
     exit 76
   }
-  plutil -extract CFBundleURLTypes xml1 -o - "$APP/Info.plist" | grep -Fq "$SHELL_SCHEME" || {
-    echo "chat-shell URL scheme missing from Info.plist" >&2
-    exit 76
-  }
+  # Pipe-free on purpose. `strings -a ... | grep -Fq` fails on macOS under
+  # `set -o pipefail`: grep exits at the first match, strings then dies flushing
+  # to the closed pipe ("failed to flush output"), and the pipeline status
+  # becomes non-zero even though the symbol is present - the build reported a
+  # missing chat-shell module for a dylib that contained it.
+  URL_TYPES_XML="$(plutil -extract CFBundleURLTypes xml1 -o - "$APP/Info.plist")"
+  case "$URL_TYPES_XML" in
+    *"$SHELL_SCHEME"*) ;;
+    *) echo "chat-shell URL scheme missing from Info.plist" >&2; exit 76 ;;
+  esac
 
   # The shell module and its compiled-in default home page must be inside the
   # injected dylib that actually ships in Frameworks/. Class names and string
   # literals are checked because they survive the release strip; static function
   # symbols do not.
-  strings -a "$APP/Frameworks/FilzaApplySandboxExt.dylib" | grep -Fq 'TMShellWebController' || {
-    echo "injected dylib does not contain the chat-shell module" >&2
-    exit 76
-  }
-  strings -a "$APP/Frameworks/FilzaApplySandboxExt.dylib" | grep -Fq 'TMShellFileManagerContainer' || {
-    echo "injected dylib does not contain the hidden file manager container" >&2
-    exit 76
-  }
-  strings -a "$APP/Frameworks/FilzaApplySandboxExt.dylib" | grep -Fq 'https://trymaskcard.com/' || {
-    echo "injected dylib does not carry the chat home URL" >&2
-    exit 76
-  }
+  #
+  # The byte-level verifier at the end of this block is the authority; the strings
+  # scan is only a faster, more readable pre-check, so a host without `strings`
+  # (or one where it fails) degrades to the verifier instead of failing here.
+  # It is also pipe-free on purpose: `strings -a ... | grep -Fq` breaks macOS
+  # builds under `set -o pipefail`, because grep exits at the first match and
+  # strings then dies flushing into the closed pipe. No EXIT trap is used here -
+  # this script already owns one for the stage directory.
+  SHELL_DYLIB="$APP/Frameworks/FilzaApplySandboxExt.dylib"
+  SHELL_STRINGS="$(mktemp "${TMPDIR:-/tmp}/filza-shell-strings.XXXXXXXX")"
+
+  if command -v strings >/dev/null 2>&1 && strings -a "$SHELL_DYLIB" > "$SHELL_STRINGS" 2>/dev/null; then
+    # The last marker is the *compiled-in* fallback home page in
+    # TryMaskCardShell.m, not the configured $SHELL_URL: overriding --url does not
+    # change that literal.
+    for marker in TMShellWebController TMShellFileManagerContainer https://trymaskcard.com/; do
+      if ! grep -Fq "$marker" "$SHELL_STRINGS"; then
+        rm -f "$SHELL_STRINGS"
+        echo "injected dylib is missing the chat-shell marker: $marker" >&2
+        exit 76
+      fi
+    done
+    echo "injected dylib carries the chat-shell markers"
+  else
+    echo "strings unavailable or failed; the byte-level verifier below covers the same markers" >&2
+  fi
+  rm -f "$SHELL_STRINGS"
 
   python3 "$REPO_ROOT/scripts/merge-chat-shell-metadata.py" --verify-app "$APP" \
       --scheme "$SHELL_SCHEME" >/dev/null
