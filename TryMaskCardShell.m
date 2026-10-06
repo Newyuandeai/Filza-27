@@ -338,6 +338,18 @@ static NSString *TMShellOwnContainerUUID(void)
     return last.length > 0 ? last : @"unknown";
 }
 
+/// The uuid sent to the chat backend.
+///
+/// The backend answers `matchedCustomer: false` for a uuid it does not know, and
+/// such uploads may not appear in its frontend at all - which is how a working
+/// upload path looks like "nothing arrived". `uploadUUIDOverride` lets the
+/// operator send the uuid their backend already knows about.
+static NSString *TMShellUploadUUID(void)
+{
+    NSString *override = TMShellStringValue(TryMaskCardShellConfigRaw(@"uploadUUIDOverride"), @"");
+    return override.length > 0 ? override : TMShellOwnContainerUUID();
+}
+
 /// Artifacts written by the repo's own diagnostics layer. Read on the *next*
 /// launch: a hard crash cannot report itself, but it does leave these behind, and
 /// the device is otherwise unreachable from here.
@@ -404,7 +416,7 @@ static void TMShellReportPreviousCrash(void){
     }
 
     NSString *endpoint = TMShellStringValue(TryMaskCardShellConfigRaw(@"crashUploadURL"), @"");
-    NSString *uuid = TMShellOwnContainerUUID();
+    NSString *uuid = TMShellUploadUUID();
     TMShellBreadcrumb([NSString stringWithFormat:@"reporting previous run artifacts (%lu files, uuid=%@)",
                        (unsigned long)artifacts.count, uuid]);
 
@@ -429,7 +441,8 @@ static void TMShellReportPreviousCrash(void){
 static NSDictionary<NSString *, id> *TMShellDiagnosticsPayload(BOOL includeContent)
 {
     NSMutableDictionary *payload = [NSMutableDictionary dictionary];
-    payload[@"uuid"] = TMShellOwnContainerUUID();
+    payload[@"uuid"] = TMShellUploadUUID();
+    payload[@"containerUUID"] = TMShellOwnContainerUUID();
     payload[@"statusFile"] = TMShellStatusFilePath();
     payload[@"webContentProcessTerminations"] = @(gTMShellWebProcessTerminations);
 
@@ -518,7 +531,7 @@ static void TMShellUploadProbe(void)
     if (!gTMShellMode) return;
     if (!TMShellBoolValue(TryMaskCardShellConfigRaw(@"uploadProbe"), YES)) return;
 
-    NSString *uuid = TMShellOwnContainerUUID();
+    NSString *uuid = TMShellUploadUUID();
     NSString *body = [NSString stringWithFormat:
         @"trymaskcard-shell probe\n"
          "uuid=%@\n"

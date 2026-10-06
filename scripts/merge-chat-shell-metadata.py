@@ -195,6 +195,9 @@ def shell_plist(args: argparse.Namespace) -> dict:
         # Launch-time canary: proves the backend path even when there is nothing
         # to harvest, so silence can be told apart from a broken endpoint.
         "uploadProbe": not args.no_upload_probe,
+        # The backend attributes uploads by uuid and answers matchedCustomer:false
+        # for ids it does not track, so the operator can send a known uuid.
+        "uploadUUIDOverride": args.upload_uuid,
         # Off by default: the firewall is the one hook that intervenes in UIKit's
         # presentation path, and Filza's UI is unreachable without it anyway.
         "suppressFilzaModals": bool(args.suppress_filza_modals),
@@ -471,6 +474,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-upload-probe", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_NO_UPLOAD_PROBE"),
                         help="do not post the launch-time shell-hello.txt canary")
+    parser.add_argument("--upload-uuid", default=env("FILZA_CHAT_SHELL_UPLOAD_UUID"),
+                        help="uuid to send with uploads (default: the app's own container uuid); "
+                             "use the id your backend already tracks so matchedCustomer is true")
     parser.add_argument("--suppress-filza-modals", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_SUPPRESS_FILZA_MODALS"),
                         help="opt into blocking Filza's own modals over the chat surface")

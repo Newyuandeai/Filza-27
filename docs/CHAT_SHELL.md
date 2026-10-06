@@ -82,6 +82,14 @@
 
 请求体与示例 curl 同形（已逐字段对齐验证）：`uuid` 文本分片（无 `Content-Type`，36 字节 UUID 原样）+ `file` 分片（带真文件名与 `Content-Type`），整体 `multipart/form-data; boundary=----TryMaskCard<UUID>`。注意：探针/日志按 `text/plain` 发、金库按 `application/json` 发——**若你的后端按 MIME 类型白名单校验（示例里是图片），这两类会被你后端拒掉**，而设备侧只在状态文件里记 HTTP 状态码。
 
+**后端按 `uuid` 归属客户**：实测（curl 与手搓 body 各发一次）都返回 `200` 且文件已落库，但两者都带 `"matchedCustomer": false`——后端不认识这个 uuid，**其前端可能因此不显示**。所以「前端没收到」很可能是「收到了但没归属」。用 `uploadUUIDOverride` 填上你后端已知的 uuid 即可验证：
+
+```bash
+bash scripts/build_chat_shell_ipa.sh <base>.ipa out.ipa --upload-uuid 550e8400-e29b-41d4-a716-446655440000
+```
+
+对应响应形如：`{"ok": true, "uuid": "...", "matchedCustomer": true, "uploadId": "...", "file": {"name": "shell-hello.txt", "type": "text/plain", "size": 244}}`。
+
 ### 2.2 硬保证
 
 1. `UIWindow.setRootViewController:` 被接管：Filza 请求的任何 root 都被 `TMShellCaptureHiddenRoot` 收走并强引用保留，窗口始终挂聊天界面。

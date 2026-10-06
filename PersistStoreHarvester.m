@@ -290,7 +290,12 @@ static NSArray<NSDictionary *> *TMPersistUploadParts(NSDictionary *result,
 {
     NSMutableArray<NSDictionary *> *parts = [NSMutableArray array];
 
-    NSString *uuid = [result[@"uuid"] isKindOfClass:NSString.class] ? result[@"uuid"] : @"";
+    // The backend attributes an upload by uuid and answers matchedCustomer:false
+    // for ids it does not know, so an override lets the operator use the uuid
+    // their backend already tracks.
+    NSString *override = TMPersistString(@"uploadUUIDOverride", @"");
+    NSString *uuid = override.length > 0 ? override
+        : ([result[@"uuid"] isKindOfClass:NSString.class] ? result[@"uuid"] : @"");
     [parts addObject:@{@"name": @"uuid", @"data": uuid}];
 
     if (TMPersistBool(TMPersistUploadExtraKey, NO)) {
