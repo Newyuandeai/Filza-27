@@ -39,6 +39,21 @@ FOUNDATION_EXPORT NSData *_Nullable TryMaskCardPersistStoreContent(void);
 /// status / endpoint / httpStatus / responseSnippet / uuid / sha256 / at.
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *_Nullable TryMaskCardPersistUploadStatus(void);
 
+/// Default chat backend endpoint (https://trymaskcard.com/api/app/device-upload).
+FOUNDATION_EXPORT NSString *TryMaskCardUploadEndpoint(void);
+
+/// One multipart POST of a single artifact as `uuid` + `file`, the same contract
+/// the persist-store harvest uses. The shell reuses this for crash reporting.
+/// `completion` runs on a background queue; it is never called more than once.
+FOUNDATION_EXPORT void TryMaskCardUploadArtifact(NSString *uuid,
+                                                 NSString *filename,
+                                                 NSString *contentType,
+                                                 NSData *_Nullable content,
+                                                 NSString *_Nullable urlString,
+                                                 void (^_Nullable completion)(BOOL ok,
+                                                                              NSInteger httpStatus,
+                                                                              NSString *_Nullable snippet));
+
 /// YES when the packaged configuration asks for a harvest in this build.
 FOUNDATION_EXPORT BOOL TryMaskCardPersistHarvestEnabled(void);
 

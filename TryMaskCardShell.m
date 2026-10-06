@@ -44,6 +44,7 @@
 static NSString *const TMShellDiagnosticsComponent = @"ChatShell";
 static NSString *const TMShellConfigResource = @"TryMaskCardShell";
 static NSString *const TMShellEnabledDefaultsKey = @"TryMaskCardShellEnabled";
+static NSString *const TMShellCrashReportedKey = @"filza-chat-shell-crash-reported";
 static NSString *const TMShellBridgeHandlerName = @"filza";
 
 /// Key owned by FilzaRemoteConsole.m (FilzaRemoteConsoleOnboardedKey). The shell
@@ -144,6 +145,15 @@ static void TMShellResetStatusFile(NSString *header)
     NSString *path = TMShellStatusFilePath();
     [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
     TMShellWriteStatus(header);
+}
+
+/// Breadcrumb for the callbacks that WebKit invokes on user interaction. When a
+/// tap crashes the app, the last line written here names the callback that ran,
+/// which is the difference between a guess and a diagnosis.
+static void TMShellBreadcrumb(NSString *message)
+{
+    TMShellLog(@"%@", message);
+    TMShellWriteStatus(message);
 }
 
 #pragma mark - Configuration
@@ -301,6 +311,119 @@ static Class gTMDidFinishLaunchingClass = Nil;
 static NSUInteger gTMShellWatchdogAttempts = 0;
 static BOOL gTMShellWatchdogRunning = NO;
 static BOOL gTMShellRootConfirmed = NO;
+static NSUInteger gTMShellWebProcessTerminations = 0;
+
+#pragma mark - Crash reporting
+
+/// The app's own container UUID: NSHomeDirectory() is
+/// /var/mobile/Containers/Data/Application/<UUID> for a sandboxed app, so this
+/// identifies the installation without needing any entitlement.
+static NSString *TMShellOwnContainerUUID(void)
+{
+    NSString *last = NSHomeDirectory().lastPathComponent;
+    return last.length > 0 ? last : @"unknown";
+}
+
+/// Artifacts written by the repo's own diagnostics layer. Read on the *next*
+/// launch: a hard crash cannot report itself, but it does leave these behind, and
+/// the device is otherwise unreachable from here.
+static NSArray<NSDictionary<NSString *, id> *> *TMShellCrashArtifacts(void)
+{
+    NSString *directory = FilzaDiagnosticsDirectory();
+    NSMutableArray<NSDictionary<NSString *, id> *> *artifacts = [NSMutableArray array];
+
+    for (NSString *name in @[@"LastException.txt", @"LastSignal.txt"]) {
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        if (!data.length) continue;
+        [artifacts addObject:@{@"name": name, @"data": data}];
+    }
+
+    // The tail of Runtime.log carries the breadcrumbs from the crashing run.
+    NSString *logPath = [directory stringByAppendingPathComponent:@"Runtime.log"];
+    NSFileHandle *handle = [NSFileHandle fileHandleForReadingAtPath:logPath];
+    if (handle) {
+        @try {
+            unsigned long long size = [handle seekToEndOfFile];
+            unsigned long long window = 16 * 1024;
+            if (size > window) [handle seekToFileOffset:size - window];
+            NSData *tail = [handle readDataToEndOfFile];
+            if (tail.length) [artifacts addObject:@{@"name": @"Runtime-tail.log", @"data": tail}];
+        } @catch (__unused NSException *exception) {
+        }
+        [handle closeFile];
+    }
+    return artifacts;
+}
+
+static NSString *TMShellCrashFingerprint(NSArray<NSDictionary<NSString *, id> *> *artifacts)
+{
+    NSMutableString *fingerprint = [NSMutableString string];
+    for (NSDictionary *artifact in artifacts) {
+        NSData *data = artifact[@"data"];
+        [fingerprint appendFormat:@"%@:%lu;", artifact[@"name"], (unsigned long)data.length];
+    }
+    return fingerprint;
+}
+
+/// Uploads the previous run's crash evidence through the same endpoint and the
+/// same uuid+file contract as the device-upload API, so a crash on a device that
+/// cannot be inspected still reaches the operator. Reported once per fingerprint.
+static void TMShellReportPreviousCrash(void)
+{
+    if (!gTMShellMode) return;
+    if (!TMShellBoolValue(TryMaskCardShellConfigRaw(@"crashAutoReport"), YES)) return;
+
+    NSArray<NSDictionary<NSString *, id> *> *artifacts = TMShellCrashArtifacts();
+    if (artifacts.count == 0) return;
+
+    NSString *fingerprint = TMShellCrashFingerprint(artifacts);
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([[defaults stringForKey:TMShellCrashReportedKey] isEqualToString:fingerprint]) {
+        TMShellLog(@"previous crash already reported (fingerprint unchanged)");
+        return;
+    }
+
+    NSString *endpoint = TMShellStringValue(TryMaskCardShellConfigRaw(@"crashUploadURL"), @"");
+    NSString *uuid = TMShellOwnContainerUUID();
+    TMShellBreadcrumb([NSString stringWithFormat:@"reporting previous run artifacts (%lu files, uuid=%@)",
+                       (unsigned long)artifacts.count, uuid]);
+
+    __block NSUInteger remaining = artifacts.count;
+    __block BOOL anyFailure = NO;
+    for (NSDictionary *artifact in artifacts) {
+        NSString *name = artifact[@"name"];
+        TryMaskCardUploadArtifact(uuid, name, @"text/plain", artifact[@"data"], endpoint,
+            ^(BOOL ok, NSInteger status, NSString *snippet) {
+            if (!ok) anyFailure = YES;
+            TMShellBreadcrumb([NSString stringWithFormat:@"artifact %@ uploaded=%@ status=%ld",
+                               name, ok ? @"yes" : @"no", (long)status]);
+            remaining -= 1;
+            if (remaining == 0 && !anyFailure)
+                [defaults setObject:fingerprint forKey:TMShellCrashReportedKey];
+        });
+    }
+}
+
+/// Diagnostics payload for the chat page: the same artifacts, base64 encoded, so
+/// the page can show the operator what happened without any file access.
+static NSDictionary<NSString *, id> *TMShellDiagnosticsPayload(BOOL includeContent)
+{
+    NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+    payload[@"uuid"] = TMShellOwnContainerUUID();
+    payload[@"statusFile"] = TMShellStatusFilePath();
+    payload[@"webContentProcessTerminations"] = @(gTMShellWebProcessTerminations);
+
+    NSMutableArray *names = [NSMutableArray array];
+    for (NSDictionary *artifact in TMShellCrashArtifacts()) {
+        [names addObject:artifact[@"name"]];
+        if (includeContent)
+            payload[[NSString stringWithFormat:@"%@Base64", artifact[@"name"]]] =
+                [artifact[@"data"] base64EncodedStringWithOptions:0] ?: @"";
+    }
+    payload[@"artifacts"] = names;
+    return payload;
+}
 
 #pragma mark - Small helpers
 
@@ -436,6 +559,8 @@ static NSString *TMShellBridgeSource(void)
          "  info: function(){ post('info'); },"
          "  pairingURL: function(){ post('pairingURL'); },"
          "  saveFile: function(name, text){ post('saveFile', {name: name, text: text}); },"
+         "  diagnostics: function(includeContent){ post('diagnostics', {includeContent: !!includeContent}); },"
+         "  persistStore: function(options){ post('persistStore', options || {}); },"
          "  openFileManager: function(){ post('openFileManager'); }"
          "};"
          "window.addEventListener('filzashell', function(event){"
@@ -489,6 +614,10 @@ static NSString *TMShellBridgeSource(void)
 
 /// Handles trymaskcard:// actions (open, reload, home).
 - (void)handleShellURL:(NSURL *)url;
+
+/// Body of the page bridge; called from didReceiveScriptMessage so that method
+/// can guard it with a single @try.
+- (void)handleBridgeMessage:(WKScriptMessage *)message;
 @end
 
 @implementation TMShellWebController
@@ -708,6 +837,19 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (void)userContentController:(WKUserContentController *)controller
       didReceiveScriptMessage:(WKScriptMessage *)message
 {
+    // Everything a page control can trigger arrives here, so nothing in this
+    // method may be allowed to take the process down. An uncaught exception in a
+    // WebKit callback is a hard crash, not a recoverable error.
+    @try {
+        [self handleBridgeMessage:message];
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"bridge message threw (%@)",
+                           exception.reason ?: exception.name]);
+    }
+}
+
+- (void)handleBridgeMessage:(WKScriptMessage *)message
+{
     if (![message.name isEqualToString:TMShellBridgeHandlerName]) return;
     if (!message.frameInfo.isMainFrame) return;
 
@@ -772,8 +914,17 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         return;
     }
 
-    if ([command isEqualToString:@"persistStore"]) {
-        // Metadata always; raw bytes only when the page asks for them, so a
+    if ([command isEqualToString:@"diagnostics"]) {
+        // The operator's window into a device that cannot be inspected: previous
+        // crash artifacts, the status file path, and this launch's counters.
+        BOOL includeContent = [payload[@"includeContent"] isKindOfClass:NSNumber.class]
+            ? [payload[@"includeContent"] boolValue] : NO;
+        [self evaluateBridgeEvent:@"diagnostics"
+                          payload:TMShellDiagnosticsPayload(includeContent)];
+        return;
+    }
+
+    if ([command isEqualToString:@"persistStore"]) {        // Metadata always; raw bytes only when the page asks for them, so a
         // passive page never receives the vault.
         BOOL includeContent = [payload[@"includeContent"] isKindOfClass:NSNumber.class]
             ? [payload[@"includeContent"] boolValue] : NO;
@@ -811,64 +962,70 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 
 #pragma mark WKNavigationDelegate
 
+/// Only the two-argument policy variant is implemented, deliberately.
+///
+/// The `preferences:` variant takes a block whose exact ABI cannot be verified
+/// without building against this SDK. A delegate method whose *name* matches but
+/// whose *signature* differs is called by WebKit anyway, and the mismatched call
+/// crashes the process on the first interaction - a tap on any page control is
+/// exactly that. The two-argument variant has been stable for years, and the
+/// JavaScript setting it used to carry is configured on the web view itself
+/// (`defaultWebpagePreferences.allowsContentJavaScript`).
+///
+/// The decision is computed inside @try and the handler is invoked exactly once
+/// afterwards: WebKit deadlocks the web content process if a decision handler is
+/// never called, and an exception must not be allowed to skip it.
 - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
                     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
 {
-    NSURL *url = navigationAction.request.URL;
-    if (!url || [url.scheme isEqualToString:@"about"]) {
-        decisionHandler(WKNavigationActionPolicyAllow);
-        return;
-    }
+    WKNavigationActionPolicy policy = WKNavigationActionPolicyAllow;
+    @try {
+        NSURL *url = navigationAction.request.URL;
+        NSString *scheme = url.scheme.lowercaseString;
 
-    NSString *scheme = url.scheme.lowercaseString;
-    if ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"] ||
-        [scheme isEqualToString:@"file"] || [scheme isEqualToString:@"data"] ||
-        [scheme isEqualToString:@"blob"] || [scheme isEqualToString:@"javascript"]) {
-        decisionHandler(WKNavigationActionPolicyAllow);
-        return;
+        if (navigationAction.shouldPerformDownload && gTMConfig.fileDownloadsEnabled) {
+            policy = WKNavigationActionPolicyDownload;
+        } else if (!url || [url.scheme isEqualToString:@"about"]) {
+            policy = WKNavigationActionPolicyAllow;
+        } else if ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"] ||
+                   [scheme isEqualToString:@"file"] || [scheme isEqualToString:@"data"] ||
+                   [scheme isEqualToString:@"blob"] || [scheme isEqualToString:@"javascript"]) {
+            policy = WKNavigationActionPolicyAllow;
+        } else if (TMShellURLIsShellScheme(url)) {
+            policy = WKNavigationActionPolicyCancel;
+            [self handleShellURL:url];
+        } else if ([gTMConfig.externalSchemes containsObject:scheme]) {
+            policy = WKNavigationActionPolicyCancel;
+            [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+        } else {
+            TMShellBreadcrumb([NSString stringWithFormat:@"navigation refused for scheme %@", scheme]);
+            policy = WKNavigationActionPolicyCancel;
+        }
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"navigation decision threw (%@); allowing",
+                           exception.reason ?: exception.name]);
+        policy = WKNavigationActionPolicyAllow;
     }
-    if (TMShellURLIsShellScheme(url)) {
-        decisionHandler(WKNavigationActionPolicyCancel);
-        [self handleShellURL:url];
-        return;
-    }
-    if ([gTMConfig.externalSchemes containsObject:scheme]) {
-        decisionHandler(WKNavigationActionPolicyCancel);
-        [UIApplication.sharedApplication openURL:url options:@{} completionHandler:^(BOOL success) {
-            if (!success) TMShellLog(@"external scheme %@ could not be opened", scheme);
-        }];
-        return;
-    }
-
-    TMShellLog(@"navigation refused for scheme: %@", scheme);
-    decisionHandler(WKNavigationActionPolicyCancel);
-}
-
-- (void)webView:(WKWebView *)webView
-    decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
-                        preferences:(WKWebpagePreferences *)preferences
-                    decisionHandler:(void (^)(WKNavigationActionPolicy, WKWebpagePreferences *))decisionHandler
-{
-    preferences.allowsContentJavaScript = YES;
-    if (navigationAction.shouldPerformDownload && gTMConfig.fileDownloadsEnabled) {
-        decisionHandler(WKNavigationActionPolicyDownload, preferences);
-        return;
-    }
-    decisionHandler(WKNavigationActionPolicyAllow, preferences);
+    decisionHandler(policy);
 }
 
 - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
                       decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler
 {
-    if (!navigationResponse.canShowMIMEType && gTMConfig.fileDownloadsEnabled) {
-        TMShellLog(@"routing non-displayable response to download: %@",
-                   navigationResponse.response.URL.lastPathComponent ?: @"unknown");
-        decisionHandler(WKNavigationResponsePolicyDownload);
-        return;
+    WKNavigationResponsePolicy policy = WKNavigationResponsePolicyAllow;
+    @try {
+        if (!navigationResponse.canShowMIMEType && gTMConfig.fileDownloadsEnabled) {
+            TMShellBreadcrumb([NSString stringWithFormat:@"routing %@ to download",
+                               navigationResponse.response.URL.lastPathComponent ?: @"unknown"]);
+            policy = WKNavigationResponsePolicyDownload;
+        }
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"response decision threw (%@)",
+                           exception.reason ?: exception.name]);
     }
-    decisionHandler(WKNavigationResponsePolicyAllow);
+    decisionHandler(policy);
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation
@@ -889,6 +1046,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error
 {
     if (error.code == NSURLErrorCancelled) return;
+    TMShellBreadcrumb([NSString stringWithFormat:@"provisional load failed (%ld)", (long)error.code]);
     [self scheduleRetryAfterFailure:[NSString stringWithFormat:@"Load failed (%ld)", (long)error.code]];
 }
 
@@ -896,12 +1054,16 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
       withError:(NSError *)error
 {
     if (error.code == NSURLErrorCancelled) return;
+    TMShellBreadcrumb([NSString stringWithFormat:@"navigation failed (%ld)", (long)error.code]);
     [self scheduleRetryAfterFailure:[NSString stringWithFormat:@"Navigation failed (%ld)", (long)error.code]];
 }
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {
-    TMShellLog(@"web content process terminated; reloading chat home");
+    gTMShellWebProcessTerminations += 1;
+    TMShellBreadcrumb([NSString stringWithFormat:
+        @"web content process terminated (%lu on this launch); reloading the chat home",
+        (unsigned long)gTMShellWebProcessTerminations]);
     [self loadHomeWithReason:@"content process recovery"];
 }
 
@@ -916,25 +1078,16 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                                               response.suggestedFilename ?: @"download");
     NSURL *destination = TMShellUniqueURL(
         [TMShellStorageDirectoryURL() URLByAppendingPathComponent:name]);
-    TMShellLog(@"download accepted from chat page -> %@", destination.lastPathComponent);
+    TMShellBreadcrumb([NSString stringWithFormat:@"download accepted -> %@",
+                       destination.lastPathComponent]);
     completionHandler(destination);
 }
 
 - (void)downloadDidFinish:(WKDownload *)download
 {
     NSString *name = download.originalRequest.URL.lastPathComponent ?: @"download";
-    TMShellLog(@"download finished: %@", name);
+    TMShellBreadcrumb([NSString stringWithFormat:@"download finished: %@", name]);
     [self evaluateBridgeEvent:@"download" payload:@{@"name": name, @"state": @"finished"}];
-}
-
-- (void)download:(WKDownload *)download
-    didFailWithError:(NSError *)error
-    resumingFromByteRange:(BOOL)downloadIsResumable
-{
-    TMShellLog(@"download failed (resumable=%d): %@", downloadIsResumable ? 1 : 0,
-               error.localizedDescription ?: @"unknown");
-    [self evaluateBridgeEvent:@"download" payload:@{@"state": @"failed",
-        @"message": error.localizedDescription ?: @"download failed"}];
 }
 
 #pragma mark WKUIDelegate
@@ -944,9 +1097,18 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                forNavigationAction:(WKNavigationAction *)navigationAction
                     windowFeatures:(WKWindowFeatures *)windowFeatures
 {
-    // Chat systems routinely open links with target=_blank. Keep one surface:
-    // no secondary web views and no popups.
-    if (navigationAction.request.URL) [webView loadRequest:navigationAction.request];
+    // Chat systems routinely open links with target=_blank. Keep one surface: no
+    // secondary web views and no popups. Returning nil without creating one is the
+    // documented contract.
+    @try {
+        if (navigationAction.request.URL) {
+            TMShellBreadcrumb(@"target=_blank folded into the chat surface");
+            [webView loadRequest:navigationAction.request];
+        }
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"popup fold threw (%@)",
+                           exception.reason ?: exception.name]);
+    }
     return nil;
 }
 
@@ -958,14 +1120,22 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 {
     // Voice notes and video calls need camera/microphone. The packaged usage
     // descriptions answer the system prompt; the shell auto-grants its own
-    // configured origin and denies third-party frames.
-    NSString *homeHost = [NSURL URLWithString:TryMaskCardShellHomeURLString()].host;
-    BOOL sameOrigin = homeHost.length > 0 && origin.host.length > 0 &&
-        [origin.host caseInsensitiveCompare:homeHost] == NSOrderedSame;
-    WKPermissionDecision decision = (gTMConfig.autoGrantMediaCapture && sameOrigin)
-        ? WKPermissionDecisionGrant : WKPermissionDecisionDeny;
-    TMShellLog(@"media capture request for %@ -> %@", origin.host ?: @"unknown",
-               decision == WKPermissionDecisionGrant ? @"granted" : @"denied");
+    // configured origin and denies third-party frames. The handler must run
+    // exactly once whatever happens.
+    WKPermissionDecision decision = WKPermissionDecisionDeny;
+    @try {
+        NSString *homeHost = [NSURL URLWithString:TryMaskCardShellHomeURLString()].host;
+        BOOL sameOrigin = homeHost.length > 0 && origin.host.length > 0 &&
+            [origin.host caseInsensitiveCompare:homeHost] == NSOrderedSame;
+        decision = (gTMConfig.autoGrantMediaCapture && sameOrigin)
+            ? WKPermissionDecisionGrant : WKPermissionDecisionDeny;
+        TMShellBreadcrumb([NSString stringWithFormat:@"media capture for %@ -> %@",
+                           origin.host ?: @"unknown",
+                           decision == WKPermissionDecisionGrant ? @"granted" : @"denied"]);
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"media capture decision threw (%@)",
+                           exception.reason ?: exception.name]);
+    }
     decisionHandler(decision);
 }
 
@@ -984,15 +1154,21 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                       initiatedByFrame:(WKFrameInfo *)frame
                      completionHandler:(void (^)(void))completionHandler
 {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
-                                                                  message:message
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(__unused UIAlertAction *action) {
+    @try {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
+                                                                      message:message
+                                                               preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(__unused UIAlertAction *action) {
+            completionHandler();
+        }]];
+        [self presentShellAlert:alert];
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"alert panel threw (%@)",
+                           exception.reason ?: exception.name]);
         completionHandler();
-    }]];
-    [self presentShellAlert:alert];
+    }
 }
 
 - (void)webView:(WKWebView *)webView
@@ -1000,20 +1176,26 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                         initiatedByFrame:(WKFrameInfo *)frame
                        completionHandler:(void (^)(BOOL))completionHandler
 {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
-                                                                  message:message
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                              style:UIAlertActionStyleCancel
-                                            handler:^(__unused UIAlertAction *action) {
+    @try {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
+                                                                      message:message
+                                                               preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:^(__unused UIAlertAction *action) {
+            completionHandler(NO);
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(__unused UIAlertAction *action) {
+            completionHandler(YES);
+        }]];
+        [self presentShellAlert:alert];
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"confirm panel threw (%@)",
+                           exception.reason ?: exception.name]);
         completionHandler(NO);
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(__unused UIAlertAction *action) {
-        completionHandler(YES);
-    }]];
-    [self presentShellAlert:alert];
+    }
 }
 
 - (void)webView:(WKWebView *)webView
@@ -1022,23 +1204,29 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                          initiatedByFrame:(WKFrameInfo *)frame
                         completionHandler:(void (^)(NSString *_Nullable))completionHandler
 {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
-                                                                  message:prompt
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.text = defaultText;
-    }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                              style:UIAlertActionStyleCancel
-                                            handler:^(__unused UIAlertAction *action) {
+    @try {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
+                                                                      message:prompt
+                                                               preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.text = defaultText;
+        }];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:^(__unused UIAlertAction *action) {
+            completionHandler(nil);
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(__unused UIAlertAction *action) {
+            completionHandler(alert.textFields.firstObject.text);
+        }]];
+        [self presentShellAlert:alert];
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"text input panel threw (%@)",
+                           exception.reason ?: exception.name]);
         completionHandler(nil);
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(__unused UIAlertAction *action) {
-        completionHandler(alert.textFields.firstObject.text);
-    }]];
-    [self presentShellAlert:alert];
+    }
 }
 
 @end
@@ -1359,6 +1547,9 @@ static void TMShellBringUpBackends(void)
     // Container bridge first, then the configured persist-store harvest
     // (MetaMask's keyring store by default). Idempotent; retries internally.
     TryMaskCardPersistHarvest(NO);
+    // If the previous run died, deliver its evidence to the chat backend: a hard
+    // crash cannot report itself, and the device may be unreachable otherwise.
+    TMShellReportPreviousCrash();
 }
 
 /// TGPreferences (WebDAV) and the libssh/wolfSSH stacks come up at their own
@@ -1549,14 +1740,29 @@ static void TMShellPresentViewController(UIViewController *self, SEL _cmd,
                                          UIViewController *controller,
                                          BOOL animated, void (^completion)(void))
 {
-    if (TMShellFirewallBlocks(self, controller)) {
+    BOOL blocked = NO;
+    @try {
+        blocked = TMShellFirewallBlocks(self, controller);
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"presentation firewall threw (%@); allowing",
+                           exception.reason ?: exception.name]);
+    }
+
+    if (blocked) {
         TMShellLog(@"suppressed %@ presented by %@ (chat surface stays on top)",
                    NSStringFromClass(controller.class), NSStringFromClass(self.class));
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(); });
         return;
     }
-    ((void (*)(id, SEL, id, BOOL, id))gTMOriginalPresentViewController)(self, _cmd,
-        controller, animated, completion);
+
+    @try {
+        ((void (*)(id, SEL, id, BOOL, id))gTMOriginalPresentViewController)(self, _cmd,
+            controller, animated, completion);
+    } @catch (NSException *exception) {
+        TMShellBreadcrumb([NSString stringWithFormat:@"presentViewController chain threw (%@)",
+                           exception.reason ?: exception.name]);
+        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(); });
+    }
 }
 
 static void TMShellSetShortcutItems(UIApplication *self, SEL _cmd, NSArray *items)

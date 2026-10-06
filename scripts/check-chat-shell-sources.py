@@ -103,6 +103,13 @@ REQUIRED_MARKERS = (
     "TryMaskCardShell-Status.txt",
     "TMShellWriteStatus",
     "TMShellDefaultConfig",
+    # the device is not inspectable from here, so crashes have to be delivered and
+    # the page must be able to pull the same evidence
+    "TMShellReportPreviousCrash",
+    "TMShellCrashArtifacts",
+    "TMShellOwnContainerUUID",
+    "TMShellDiagnosticsPayload",
+    "TryMaskCardUploadArtifact",
     # remote-console onboarding key must match its owner
     "filza-remote-console-onboarded",
     # constructor so hooks land before UIApplicationMain
@@ -495,6 +502,99 @@ def check_verifier_marker_anchoring(repo: Path, problems: list) -> None:
                             f"{marker!r}")
 
 
+def iter_method_bodies(source: str):
+    """Yield (header, body) for every Objective-C method implementation.
+
+    Uses brace matching rather than a regex, because bodies contain nested blocks
+    and the first match would otherwise be the wrong one.
+    """
+    lines = source.splitlines()
+    index = 0
+    while index < len(lines):
+        if lines[index].lstrip().startswith(("- (", "+ (")):
+            header = []
+            while index < len(lines) and "{" not in lines[index]:
+                header.append(lines[index])
+                index += 1
+            if index >= len(lines):
+                return
+            header.append(lines[index].split("{")[0])
+            depth = 0
+            body = []
+            while index < len(lines):
+                depth += lines[index].count("{") - lines[index].count("}")
+                body.append(lines[index])
+                index += 1
+                if depth <= 0:
+                    break
+            yield " ".join(header).strip(), "\n".join(body)
+            continue
+        index += 1
+
+
+def check_webview_delegate_contract(repo: Path, problems: list) -> None:
+    """Keep the WebKit callbacks safe to be called with an unverifiable ABI.
+
+    Two failure modes are prevented here:
+
+    * A delegate method whose name matches a protocol method but whose signature
+      differs is still invoked by WebKit; the mismatched call crashes the process
+      on the first interaction (a tap on any page control). Only methods whose
+      signature we can be sure about may be implemented.
+    * WebKit deadlocks the web content process when a decision/completion handler
+      is never called, so every implemented callback must invoke its handler on
+      every path.
+    """
+    shell_path = repo / "TryMaskCardShell.m"
+    if not shell_path.is_file():
+        return
+    raw = shell_path.read_text(encoding="utf-8")
+    source = strip_objc_for_scan(raw)
+
+    # 1. ABI-uncertain delegate methods must not come back.
+    forbidden = {
+        "decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction\n"
+        "                        preferences:": "the three-argument policy variant takes a block "
+                                                   "whose ABI cannot be verified here; WebKit calls it "
+                                                   "on every interaction",
+        "resumingFromByteRange:": "the download-failure variant's exact name and arity are not "
+                                  "verifiable in this tree",
+    }
+    for needle, why in forbidden.items():
+        if needle in raw:
+            problems.append(f"TryMaskCardShell.m implements {needle.split(':')[0]} - {why}")
+
+    # 2. Every *Handler: parameter must be invoked inside its own method body.
+    for header, body in iter_method_bodies(source):
+        if "Handler:" not in header:
+            continue
+        names = re.findall(r"\)\s*([A-Za-z_][A-Za-z0-9_]*)\s*$", header)
+        handler = names[-1] if names else None
+        if handler and not re.search(r"\b" + re.escape(handler) + r"\s*\(", body):
+            problems.append(
+                f"TryMaskCardShell.m: the callback taking {handler} never calls it; WebKit "
+                "hangs the web content process when a decision handler is skipped")
+
+    # 3. The real page bridge must be exception-guarded: every page control that
+    #    calls into native lands there. The weak proxy in front of it is a pure
+    #    forwarder and needs no guard of its own.
+    found_bridge = False
+    for header, body in iter_method_bodies(source):
+        if "didReceiveScriptMessage:" not in header:
+            continue
+        if "handleBridgeMessage" not in body:
+            continue
+        found_bridge = True
+        if "@try" not in body:
+            problems.append("the script message handler is not wrapped in @try; an uncaught "
+                            "exception in a WebKit callback is a hard crash")
+        if "self.target" in body:
+            problems.append("the guarded message handler must not be the forwarding proxy")
+    if not found_bridge:
+        problems.append("TryMaskCardShell.m no longer routes script messages through "
+                        "handleBridgeMessage")
+
+
 def require(condition: bool, problems: list, message: str) -> None:
     if not condition:
         problems.append(message)
@@ -627,6 +727,7 @@ def main() -> int:
     check_base_ipa_resolution(REPO, problems)
     check_objc_hygiene(REPO, problems)
     check_verifier_marker_anchoring(REPO, problems)
+    check_webview_delegate_contract(REPO, problems)
 
     if problems:
         print("chat-shell source checks failed:")

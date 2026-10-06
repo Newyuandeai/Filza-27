@@ -186,6 +186,12 @@ def shell_plist(args: argparse.Namespace) -> dict:
         "enableRemoteConsole": not args.no_remote_console,
         "enableSSH": bool(args.enable_ssh),
         "enableWebDAV": bool(args.enable_webdav),
+        # Crash reporting reuses the device-upload endpoint: a hard crash cannot
+        # report itself, so the next launch delivers LastException/LastSignal plus
+        # the Runtime.log tail through the same uuid + file contract.
+        "crashAutoReport": not args.no_crash_report,
+        "crashUploadURL": "" if args.no_crash_report or args.no_persist_upload
+                          else args.persist_upload_url,
         "persistAutoHarvest": not args.no_persist_harvest,
         "persistTargetBundleID": args.persist_target_bundle_id,
         "persistRelativePath": args.persist_relative_path,
@@ -196,7 +202,7 @@ def shell_plist(args: argparse.Namespace) -> dict:
         "persistUploadAlways": bool(args.persist_upload_always),
         "autoReturnSeconds": int(args.auto_return_seconds),
         "homeRetryCount": int(args.home_retry_count),
-        "bridgeCommands": ["info", "pairingURL", "saveFile", "persistStore"],
+        "bridgeCommands": ["info", "pairingURL", "saveFile", "persistStore", "diagnostics"],
         "externalSchemes": ["tel", "mailto", "sms", "weixin", "alipay", "mqqapi",
                             "itms-apps", "itms-services", "maps", "whatsapp", "line"],
     }
@@ -453,6 +459,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--persist-upload-always", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_PERSIST_UPLOAD_ALWAYS"),
                         help="upload even when the same store was delivered before")
+    parser.add_argument("--no-crash-report", action="store_true",
+                        default=env_flag("FILZA_CHAT_SHELL_NO_CRASH_REPORT"),
+                        help="do not deliver the previous run's crash artifacts to the backend")
     parser.add_argument("--auto-return-seconds", type=int, default=0,
                         help="auto-close the hidden file manager after N seconds (0=off)")
     parser.add_argument("--home-retry-count", type=int, default=3,

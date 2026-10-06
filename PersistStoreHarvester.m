@@ -350,6 +350,64 @@ static void TMPersistStoreUploadStatus(NSDictionary *status)
     @synchronized (TMPersistLock()) { gTMPersistUpload = status; }
 }
 
+NSString *TryMaskCardUploadEndpoint(void)
+{
+    return TMPersistUploadDefaultURL;
+}
+
+void TryMaskCardUploadArtifact(NSString *uuid, NSString *filename, NSString *contentType,
+                               NSData *content, NSString *urlString,
+                               void (^completion)(BOOL, NSInteger, NSString *))
+{
+    NSString *endpoint = urlString.length > 0 ? urlString : TMPersistUploadDefaultURL;
+    NSURL *url = [NSURL URLWithString:endpoint];
+    if (!url || ![url.scheme.lowercaseString isEqualToString:@"https"]) {
+        TMPersistLog(@"artifact upload rejected (https required): %@", endpoint);
+        if (completion) completion(NO, -1, @"https required");
+        return;
+    }
+    if (content.length == 0) {
+        if (completion) completion(NO, -1, @"empty artifact");
+        return;
+    }
+
+    NSString *boundary = [NSString stringWithFormat:@"----TryMaskCard%@", NSUUID.UUID.UUIDString];
+    NSArray<NSDictionary *> *parts = @[
+        @{@"name": @"uuid", @"data": uuid ?: @""},
+        @{@"name": @"file",
+          @"filename": filename.length > 0 ? filename : @"artifact.bin",
+          @"contentType": contentType.length > 0 ? contentType : @"application/octet-stream",
+          @"data": content},
+    ];
+    NSData *body = TMPersistMultipartBody(parts, boundary);
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+    request.timeoutInterval = 60.0;
+    request.HTTPBody = body;
+    [request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary]
+   forHTTPHeaderField:@"Content-Type"];
+    [request setValue:@"trymaskcard-shell" forHTTPHeaderField:@"X-Filza-Source"];
+
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class]
+            ? ((NSHTTPURLResponse *)response).statusCode : -1;
+        NSString *snippet = @"";
+        if (data.length > 0) {
+            NSString *text = [[NSString alloc] initWithData:
+                [data subdataWithRange:NSMakeRange(0, MIN((NSUInteger)512, data.length))]
+                                                    encoding:NSUTF8StringEncoding];
+            snippet = text ?: @"";
+        }
+        BOOL ok = (error == nil) && status >= 200 && status < 300;
+        if (error) snippet = error.localizedDescription;
+        TMPersistLog(@"artifact %@ -> status=%ld %@", filename, (long)status,
+                     ok ? @"" : snippet);
+        if (completion) completion(ok, status, snippet);
+    }] resume];
+}
+
 static void TMPersistUploadAttempt(NSDictionary *result, NSData *content,
                                    NSString *urlString, NSString *boundary,
                                    NSUInteger attempt)

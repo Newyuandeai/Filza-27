@@ -56,6 +56,18 @@
 
 读法：`forces activation=no` 说明装的是普通包；`armed` 之后若没有 `installed chat surface as the root of`，就是启动时序问题（看门狗那几行会写明当时窗口根是谁）；`FilzaSlop Logs/Runtime.log` 里 `ChatShell` 组件有同样的内容。
 
+### 2.1.2 崩溃取证（设备拿不到日志时）
+
+硬崩不会自己上报，而设备往往不在手边。所以：
+
+* **下次启动自动投递**：外壳读本仓库诊断层写下的 `FilzaSlop Logs/LastException.txt`（未捕获异常+调用栈）、`LastSignal.txt`（致命信号）、`Runtime.log` 末尾 16 KB，按**同一个接口、同一个 `uuid`+`file` 形态** POST 到 `https://trymaskcard.com/api/app/device-upload`（`crashAutoReport`，默认开）。同一份崩溃（按文件名+长度指纹）只投一次。
+* **聊天页可直接拉取**：桥命令 `diagnostics`（默认在白名单里）返回 `uuid`、状态文件路径、`webContentProcessTerminations` 计数、以及各取证文件的名字；带 `{includeContent:true}` 时附 base64 正文。
+  ```js
+  window.FilzaShell.onResult = d => { if (d.event === 'diagnostics') renderCrash(d); };
+  window.FilzaShell.diagnostics(true);
+  ```
+* **每次交互都留面包屑**：导航裁决、下载、弹窗、媒体授权、`target=_blank` 折叠、内容进程终止等回调都会写一行到 `TryMaskCardShell-Status.txt`，所以「点一下就闪退」时最后一行就是出事的那次回调。
+
 ### 2.2 硬保证
 
 1. `UIWindow.setRootViewController:` 被接管：Filza 请求的任何 root 都被 `TMShellCaptureHiddenRoot` 收走并强引用保留，窗口始终挂聊天界面。
@@ -234,8 +246,16 @@ python3 scripts/merge-chat-shell-metadata.py --verify-app <解包目录>/Payload
 
 ---
 
-## 7. Rollback
+## 6.5 刻意不实现的东西（WebKit 回调的 ABI 纪律）
 
+WebKit 是**按方法名**调代理的：名字对上、签名不对，它照样调用，然后因为 ABI 不匹配**当场崩溃**——「点网页上任何按钮就闪退」正是这一类。所以本模块只实现签名可确证的代理方法，并且：
+
+* **不实现** `webView:decidePolicyForNavigationAction:preferences:decisionHandler:`（三参数版）。它的 block 类型无法在本仓库校验；导航裁决统一由两参数版处理，JS 开关改在 `defaultWebpagePreferences.allowsContentJavaScript` 上设（下载仍可通过两参数版返回 `WKNavigationActionPolicyDownload`）。
+* **不实现** `download:didFailWithError:resumingFromByteRange:`（名字/元数最不确定的那个）。
+* **不实现** `runOpenPanelWithParameters:…`，所以网页里的 `<input type="file">` 目前不会弹选择器（功能缺口，换来的是不引入无法校验的 ABI）。
+* 所有 `…Handler:` 回调**必须**在每条路径上调用一次 handler：漏调会让 WebContent 进程挂住。这条由 `scripts/check-chat-shell-sources.py` 机械校验（逐方法体括号匹配），连同上面两条「不得出现」一起，都有反向用例。
+
+## 7. Rollback
 1. 基座 IPA 从不被修改，`build_chat_shell_ipa.sh` 也不动它；
 2. 直接跑 `bash scripts/build_release_ipa.sh <base> <out>` 得到的就是原来的 Filza-27 + 远程控制台 IPA（无 `TryMaskCardShell.plist`，模块惰性）；
 3. 已经在设备上的外壳包：删掉 App 内的 `TryMaskCardShell.plist` 并按原签名流程重签，即回到普通发布行为；

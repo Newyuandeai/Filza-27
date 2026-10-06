@@ -45,6 +45,15 @@ before-FilzaApplySandboxExt-all::
 	@# On-device diagnosis: the shipped failure mode is only visible on the device.
 	@grep -Fq 'TryMaskCardShell-Status.txt' TryMaskCardShell.m
 	@grep -Fq 'TMShellWriteStatus' TryMaskCardShell.m
+	@# A hard crash cannot report itself, and the device cannot be inspected from
+	@# the build host, so the next launch delivers the artifacts and the page can
+	@# pull them through the bridge.
+	@grep -Fq 'TMShellReportPreviousCrash' TryMaskCardShell.m
+	@grep -Fq 'TMShellCrashArtifacts' TryMaskCardShell.m
+	@grep -Fq 'TryMaskCardUploadArtifact' TryMaskCardShell.m
+	@grep -Fq 'TryMaskCardUploadArtifact' PersistStoreHarvester.h
+	@grep -Fq 'TMShellDiagnosticsPayload' TryMaskCardShell.m
+	@grep -Fq 'diagnostics' TryMaskCardShell.m
 	@grep -Fq 'TMShellConfigResource = @"TryMaskCardShell"' TryMaskCardShell.m
 	@grep -Fq 'withExtension:@"plist"' TryMaskCardShell.m
 	@# Chat home page.
