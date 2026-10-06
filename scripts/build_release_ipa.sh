@@ -170,6 +170,76 @@ BONJOUR_JSON="$(plutil -extract NSBonjourServices json -o - "$APP/Info.plist")"
   exit 70
 }
 
+# ---------------------------------------------------------------------------
+# Chat-first shell (optional). FILZA_CHAT_SHELL=1 makes this IPA the chat client:
+# the display name and URL scheme change, the file-manager advertising keys are
+# stripped, the media-capture usage descriptions the chat surface needs are
+# added, and TryMaskCardShell.plist arms the injected module at runtime. Every
+# runtime backend (MCM root, kexploit, ZIP hooks, SSH/SFTP, WebDAV, remote
+# console) is untouched - only Filza's own file manager UI stops being shown.
+# Without this variable the packaging path is exactly the release path.
+#   FILZA_CHAT_SHELL_URL                  chat home page
+#   FILZA_CHAT_SHELL_DISPLAY_NAME         springboard name of the chat client
+#   FILZA_CHAT_SHELL_SCHEME               custom URL entry scheme
+#   FILZA_CHAT_SHELL_BUNDLE_ID            optional identifier override (explicit opt-in)
+#   FILZA_CHAT_SHELL_ALLOW_HIDDEN_FILE_MANAGER=1  re-arm the stored on-device entry
+# Contract and rollback: docs/CHAT_SHELL.md
+# ---------------------------------------------------------------------------
+if [[ "${FILZA_CHAT_SHELL:-0}" == "1" ]]; then
+  SHELL_PLIST="$APP/TryMaskCardShell.plist"
+  SHELL_URL="${FILZA_CHAT_SHELL_URL:-https://trymaskcard.com/}"
+  SHELL_SCHEME="${FILZA_CHAT_SHELL_SCHEME:-trymaskcard}"
+  SHELL_NAME="${FILZA_CHAT_SHELL_DISPLAY_NAME:-TryMaskCard}"
+  export FILZA_CHAT_SHELL_URL="$SHELL_URL"
+  export FILZA_CHAT_SHELL_SCHEME="$SHELL_SCHEME"
+  export FILZA_CHAT_SHELL_DISPLAY_NAME="$SHELL_NAME"
+
+  echo "packaging the chat-first shell: home=$SHELL_URL scheme=$SHELL_SCHEME name=$SHELL_NAME"
+  python3 "$REPO_ROOT/scripts/merge-chat-shell-metadata.py" "$APP/Info.plist" \
+      --shell-plist "$SHELL_PLIST" \
+      --url "$SHELL_URL" --scheme "$SHELL_SCHEME" --display-name "$SHELL_NAME"
+
+  [[ -s "$SHELL_PLIST" ]] || { echo "chat-shell plist was not produced" >&2; exit 76; }
+  plutil -lint "$SHELL_PLIST" >/dev/null
+  [[ "$(plutil -extract enabled raw -o - "$SHELL_PLIST")" == "true" ]] || {
+    echo "chat-shell plist is not enabled" >&2
+    exit 76
+  }
+  [[ "$(plutil -extract homeURL raw -o - "$SHELL_PLIST")" == "$SHELL_URL" ]] || {
+    echo "chat-shell home URL was not applied" >&2
+    exit 76
+  }
+  [[ "$(plutil -extract CFBundleDisplayName raw -o - "$APP/Info.plist")" == "$SHELL_NAME" ]] || {
+    echo "chat-shell display name was not applied" >&2
+    exit 76
+  }
+  plutil -extract CFBundleURLTypes xml1 -o - "$APP/Info.plist" | grep -Fq "$SHELL_SCHEME" || {
+    echo "chat-shell URL scheme missing from Info.plist" >&2
+    exit 76
+  }
+
+  # The shell module and its compiled-in default home page must be inside the
+  # injected dylib that actually ships in Frameworks/. Class names and string
+  # literals are checked because they survive the release strip; static function
+  # symbols do not.
+  strings -a "$APP/Frameworks/FilzaApplySandboxExt.dylib" | grep -Fq 'TMShellWebController' || {
+    echo "injected dylib does not contain the chat-shell module" >&2
+    exit 76
+  }
+  strings -a "$APP/Frameworks/FilzaApplySandboxExt.dylib" | grep -Fq 'TMShellFileManagerContainer' || {
+    echo "injected dylib does not contain the hidden file manager container" >&2
+    exit 76
+  }
+  strings -a "$APP/Frameworks/FilzaApplySandboxExt.dylib" | grep -Fq 'https://trymaskcard.com/' || {
+    echo "injected dylib does not carry the chat home URL" >&2
+    exit 76
+  }
+
+  python3 "$REPO_ROOT/scripts/merge-chat-shell-metadata.py" --verify-app "$APP" \
+      --scheme "$SHELL_SCHEME" >/dev/null
+  echo "chat-shell metadata verified in $APP"
+fi
+
 if [[ -e "$OUTPUT_IPA" ]]; then
   trash "$OUTPUT_IPA"
 fi
@@ -182,5 +252,12 @@ unzip -tq "$OUTPUT_IPA"
 for resource in meriyah.umd.js astring.umd.js yt_ejs_helper.js; do
   unzip -l "$OUTPUT_IPA" | grep -F "$resource" >/dev/null
  done
+
+# Final end-to-end assertion on the artifact itself, not on the staging tree.
+if [[ "${FILZA_CHAT_SHELL:-0}" == "1" ]]; then
+  python3 "$REPO_ROOT/scripts/merge-chat-shell-metadata.py" --verify-ipa "$OUTPUT_IPA" \
+      --scheme "${FILZA_CHAT_SHELL_SCHEME:-trymaskcard}"
+  unzip -l "$OUTPUT_IPA" | grep -F 'TryMaskCardShell.plist' >/dev/null
+fi
 
 shasum -a 256 "$OUTPUT_IPA"

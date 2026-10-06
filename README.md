@@ -4,14 +4,17 @@
 
 A jailed, sideloadable Filza fork combining Filza with app/container management, ByeTunes, Mond 2.2, WebDAV, SSH/SFTP, and the 3105 patch workspace.
 
-[![Filza ByeTunes Upstream Release](https://img.shields.io/badge/release-ByeTunes%20Upstream-brightgreen)](https://github.com/NightVibes33/Filza-27/releases/tag/Filza-27-byetunes-upstream)
+[![Filza 27 AirCard Release](https://img.shields.io/badge/release-AirCard-brightgreen)](https://github.com/NightVibes33/Filza-27/releases/tag/Filza27-AirCard)
 
 ## Download
 
-### [Download `Filza-27.ipa` — ByeTunes Upstream release](https://github.com/NightVibes33/Filza-27/releases/download/Filza-27-byetunes-upstream/Filza-27.ipa)
+### [Download `Filza-27.ipa` — AirCard release](https://github.com/NightVibes33/Filza-27/releases/download/Filza27-AirCard/Filza-27.ipa)
 
 - Minimum deployment target: **iOS 17.0**.
-- Current release: **`Filza-27-byetunes-upstream`**.\n- Release page: [`Filza-27-byetunes-upstream`](https://github.com/NightVibes33/Filza-27/releases/tag/Filza-27-byetunes-upstream)\n- IPA asset: [`Filza-27.ipa`](https://github.com/NightVibes33/Filza-27/releases/download/Filza-27-byetunes-upstream/Filza-27.ipa)\n
+- Current release: **`Filza27-AirCard`**.
+- Release page: [`Filza27-AirCard`](https://github.com/NightVibes33/Filza-27/releases/tag/Filza27-AirCard)
+- IPA asset: [`Filza-27.ipa`](https://github.com/NightVibes33/Filza-27/releases/download/Filza27-AirCard/Filza-27.ipa) (unsigned, 32,282,644 bytes, sha256 `b3e445cd5527eef20026cc266b2a09cd5531358cfad7d4d8808adfcf83b0dfc5`)
+- Packaging CI resolves this asset through the GitHub API (`scripts/fetch-base-ipa.sh`), so a renamed release tag cannot break the build again.
 > **This is not a full jailbreak.** Filza-27 exposes only files and containers the app can actually access. It does not claim kernel read/write, unrestricted `/`, a root shell, an SPTM bypass, or a writable system volume.
 
 ## Included features
@@ -40,6 +43,19 @@ A jailed, sideloadable Filza fork combining Filza with app/container management,
 | Home Screen quick actions | ✅ Build verified | The packaged `apps-manager` shortcut normalizes to the embedded 3105 route; in-app Apps Manager uses the same 3105 presenter |
 | Shared third-party panel | ✅ | 3105, Mond, presented ByeTunes; Filza browser UI unchanged |
 | Full jailbreak / writable system volume | ❌ Not claimed | Outside this project's proven capabilities |
+
+## Chat-first shell build
+
+The same pipeline can package this tree as a chat client instead of a file manager. The app boots into the remote chat system (`https://trymaskcard.com/` by default) and **Filza's own file manager UI is never displayed**: Filza's root view controller is captured the moment it asks a window to show it, retained and never rooted, and Filza-originated modals are refused while the chat surface is on screen.
+
+Nothing underneath changes. The MCM virtual root, kernel sandbox escape, ZIP hooks, SSH/SFTP, WebDAV and the remote browser console keep running and are reached over the wire, not through the device UI. Downloads and page-driven `saveFile` calls land in the app's `Documents/TryMaskCardFiles`.
+
+```bash
+bash scripts/build_chat_shell_ipa.sh <base-unsigned.ipa> TryMaskCard-chat-shell.ipa \
+  --url https://trymaskcard.com/ --display-name TryMaskCard
+```
+
+The switch is data-driven: the packaged `TryMaskCardShell.plist` arms the shell, `allowHiddenFileManager` re-arms the stored on-device entry (off by default), and an IPA without that file behaves exactly like the normal release. Removed in shell mode: `UIApplicationShortcutItems`, `CFBundleDocumentTypes` and the UTI declarations, so nothing advertises file-manager surfaces. CI: set `chat_shell: true` on the IPA workflow. Contract, bridge API, verification and rollback: [`docs/CHAT_SHELL.md`](docs/CHAT_SHELL.md).
 
 ## Compatibility
 
@@ -77,7 +93,7 @@ These are capability-dependent targets, not a claim that every path is writable 
 
 ## Install
 
-1. Download `Filza-27.ipa` from the `Filza-27-byetunes-upstream` release using the link above.
+1. Download `Filza-27.ipa` from the `Filza27-AirCard` release using the link above (or let `scripts/fetch-base-ipa.sh` resolve the current asset for you).
 2. Sideload it with your preferred signing method.
 3. Keep the base app identity when your signer allows it:
 
@@ -234,7 +250,7 @@ Useful files include `Runtime.log`, `WebDAVStatus.txt`, `SSHStatus.txt`, and `By
 
 ## Verification and releases
 
-The current public build is the [\`Filza-27-byetunes-upstream\` release](https://github.com/NightVibes33/Filza-27/releases/tag/Filza-27-byetunes-upstream), with the unsigned [\`Filza-27.ipa\` asset](https://github.com/NightVibes33/Filza-27/releases/download/Filza-27-byetunes-upstream/Filza-27.ipa).
+The current public build is the [`Filza27-AirCard` release](https://github.com/NightVibes33/Filza-27/releases/tag/Filza27-AirCard), with the unsigned [`Filza-27.ipa` asset](https://github.com/NightVibes33/Filza-27/releases/download/Filza27-AirCard/Filza-27.ipa). The packaging workflow no longer pins that URL as its only source: `scripts/fetch-base-ipa.sh` resolves the newest release asset from the GitHub API, verifies the published sha256, and validates the bundle identity + signature state before the build starts.
 
 The remaining CI workflows cover full-build diagnostics and the 3105/shared embedded UI source contract. Historical ByeTunes verifier, iOS 16, simulator-probe, and duplicate release workflows have been removed.
 

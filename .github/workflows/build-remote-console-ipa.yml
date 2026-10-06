@@ -7,6 +7,11 @@ name: Build Filza-27 IPA with Remote Console
 #     (override with `base_ipa_url` if you have your own unsigned Filza shell)
 #   * injects the dylib + FilzaRemoteWeb.bundle and uploads the IPA as an artifact
 #
+# With `chat_shell: true` the same pipeline emits the chat-first shell IPA: the
+# app boots into the chat system (chat_shell_url), Filza's file manager UI is
+# never shown, and every backend runtime keeps working over the wire. Packaging
+# and rollback contract: docs/CHAT_SHELL.md
+#
 # Toolchain pins are identical to .github/workflows/diagnose-full-build.yml so a
 # green run here means the same thing a green diagnose run means.
 #
@@ -33,6 +38,18 @@ on:
         description: 'Also publish a GitHub Release with the IPA'
         type: boolean
         default: false
+      chat_shell:
+        description: 'Build the chat-first shell IPA: home page is the chat system, Filza UI is never shown'
+        type: boolean
+        default: false
+      chat_shell_url:
+        description: 'Chat system URL used as the app home page (chat_shell only)'
+        required: false
+        default: 'https://trymaskcard.com/'
+      chat_shell_display_name:
+        description: 'Springboard name for the chat client (chat_shell only)'
+        required: false
+        default: 'TryMaskCard'
 
 concurrency:
   group: build-remote-console-ipa-${{ github.ref }}
@@ -50,7 +67,12 @@ jobs:
       IDEVICE_COMMIT: 37ee77cf713f483551f3cf33ea8b2087a40058ca
       LIBSSH_COMMIT: 07430deb9b97b751ec5ea5a7fc307f40bf042e0a
       MBEDTLS_COMMIT: 068ff080b369adfac81509f9b57b2afabaf82dc5
-      PINNED_BASE_IPA: https://github.com/NightVibes33/Filza-27/releases/download/Filza-27-byetunes-upstream/Filza-27.ipa
+      BASE_IPA_REPO: NightVibes33/Filza-27
+      # Last-resort fallback only. The fetch step resolves the current release
+      # asset through the GitHub API first, because a renamed or re-published
+      # release silently 404s a hard-coded tag (that is exactly how the
+      # Filza-27-byetunes-upstream pin broke).
+      PINNED_BASE_IPA: https://github.com/NightVibes33/Filza-27/releases/download/Filza27-AirCard/Filza-27.ipa
 
     steps:
       - name: Runner diagnostics
@@ -160,13 +182,15 @@ jobs:
         id: base
         env:
           BASE_IPA_URL: ${{ inputs.base_ipa_url }}
+          BASE_IPA_REPO: ${{ env.BASE_IPA_REPO }}
+          PINNED_BASE_IPA: ${{ env.PINNED_BASE_IPA }}
         run: |
           set -euxo pipefail
-          BASE_URL="$BASE_IPA_URL"
-          if [ -z "$BASE_URL" ]; then BASE_URL="$PINNED_BASE_IPA"; fi
-          echo "base IPA: $BASE_URL"
-          curl -fL --retry 3 --retry-delay 5 -o base-filza.ipa "$BASE_URL"
-          test -s base-filza.ipa
+          # Resolves the current release asset from the GitHub API, falls back to
+          # the pinned URL, then validates the download (zip shape, single app,
+          # MobileHouseArrest bundle id, MinimumOSVersion, unsigned) *before* the
+          # long build. A bad base now fails here with a readable reason.
+          bash scripts/fetch-base-ipa.sh base-filza.ipa "$BASE_IPA_URL"
           unzip -tq base-filza.ipa
           unzip -l base-filza.ipa | grep -F 'Payload/' | sed -n '1,5p'
           echo "base_ipa=$PWD/base-filza.ipa" >> "$GITHUB_OUTPUT"
@@ -174,13 +198,23 @@ jobs:
       - name: Build the tweak and package the IPA
         id: package
         shell: bash
+        env:
+          FILZA_CHAT_SHELL: ${{ inputs.chat_shell && '1' || '0' }}
+          FILZA_CHAT_SHELL_URL: ${{ inputs.chat_shell_url }}
+          FILZA_CHAT_SHELL_DISPLAY_NAME: ${{ inputs.chat_shell_display_name }}
         run: |
           set +e
           export PATH="/opt/procursus/bin:$PATH"
           mkdir -p build-logs
-          chmod +x scripts/build_release_ipa.sh
+          chmod +x scripts/build_release_ipa.sh scripts/build_chat_shell_ipa.sh
+          OUT_IPA="Filza-27-remote-console.ipa"
+          if [ "${FILZA_CHAT_SHELL}" = "1" ]; then
+            OUT_IPA="TryMaskCard-chat-shell.ipa"
+            echo "chat-first shell build: home=${FILZA_CHAT_SHELL_URL} name=${FILZA_CHAT_SHELL_DISPLAY_NAME}"
+          fi
+          echo "ipa=${OUT_IPA}" >> "$GITHUB_OUTPUT"
           set -o pipefail
-          ./scripts/build_release_ipa.sh "${{ steps.base.outputs.base_ipa }}" "Filza-27-remote-console.ipa" 2>&1 | tee build-logs/package.log
+          ./scripts/build_release_ipa.sh "${{ steps.base.outputs.base_ipa }}" "$OUT_IPA" 2>&1 | tee build-logs/package.log
           rc=${PIPESTATUS[0]}
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           echo "===== BUILD TAIL ====="
@@ -203,27 +237,44 @@ jobs:
       - name: Verify the packaged IPA contains the console
         run: |
           set -euxo pipefail
-          test -s Filza-27-remote-console.ipa
-          unzip -tq Filza-27-remote-console.ipa
-          listing="$(unzip -l Filza-27-remote-console.ipa)"
+          IPA="${{ steps.package.outputs.ipa }}"
+          test -s "$IPA"
+          unzip -tq "$IPA"
+          listing="$(unzip -l "$IPA")"
           echo "$listing" | grep -F 'Frameworks/FilzaApplySandboxExt.dylib'
           echo "$listing" | grep -F 'FilzaRemoteWeb.bundle/index.html'
           echo "$listing" | grep -F 'FilzaRemoteWeb.bundle/js/app.js'
           echo "$listing" | grep -F 'FilzaRemoteWeb.bundle/assets/images/filetype-icon-sprite.svg'
           echo "$listing" | grep -F 'Filza3105.bundle/UpstreamAppInfo.plist'
-          unzip -p Filza-27-remote-console.ipa 'Payload/*.app/Info.plist' > /tmp/packaged-info.plist
+          unzip -p "$IPA" 'Payload/*.app/Info.plist' > /tmp/packaged-info.plist
           plutil -extract CFBundleIdentifier raw -o - /tmp/packaged-info.plist | tee /tmp/packaged-id.txt
           test "$(cat /tmp/packaged-id.txt)" = "com.apple.mobile.MobileHouseArrest"
-          shasum -a 256 Filza-27-remote-console.ipa | tee Filza-27-remote-console.ipa.sha256
-          ls -l Filza-27-remote-console.ipa
+          shasum -a 256 "$IPA" | tee "$IPA.sha256"
+          ls -l "$IPA"
+
+      # Chat-first shell parity: the artifact must carry the shell plist, the
+      # chat-client metadata and the compiled module inside the injected dylib.
+      - name: Verify the chat-first shell packaging
+        if: ${{ inputs.chat_shell }}
+        run: |
+          set -euxo pipefail
+          IPA="${{ steps.package.outputs.ipa }}"
+          python3 scripts/check-chat-shell-sources.py
+          python3 scripts/merge-chat-shell-metadata.py --verify-ipa "$IPA" --scheme trymaskcard
+          unzip -p "$IPA" 'Payload/*.app/Info.plist' > /tmp/shell-info.plist
+          unzip -p "$IPA" 'Payload/*.app/TryMaskCardShell.plist' > /tmp/shell-config.plist
+          plutil -lint /tmp/shell-config.plist
+          plutil -extract CFBundleDisplayName raw -o - /tmp/shell-info.plist
+          plutil -extract homeURL raw -o - /tmp/shell-config.plist
+          plutil -extract allowHiddenFileManager raw -o - /tmp/shell-config.plist
 
       - name: Upload the IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Filza-27-remote-console-ipa-${{ github.run_id }}
+          name: filza-27-ipa-${{ github.run_id }}
           path: |
-            Filza-27-remote-console.ipa
-            Filza-27-remote-console.ipa.sha256
+            ${{ steps.package.outputs.ipa }}
+            ${{ steps.package.outputs.ipa }}.sha256
           retention-days: 30
           if-no-files-found: error
 
@@ -240,13 +291,17 @@ jobs:
         if: ${{ inputs.create_release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: filza-27-remote-console-${{ github.run_number }}
-          name: Filza-27 + Remote Console (${{ github.run_number }})
+          tag_name: filza-27-ipa-${{ github.run_number }}
+          name: Filza-27 IPA (${{ github.run_number }})
           body: |
-            Unsigned IPA built from ${{ github.sha }} with the remote file viewer console.
+            Unsigned IPA built from ${{ github.sha }}.
 
-            Enable it under **Preferences → REMOTE CONSOLE**, then open the pairing link
-            shown on the device from a browser on the same Wi-Fi.
+            Remote console build: enable it under Preferences -> REMOTE CONSOLE, then open the
+            pairing link shown on the device from a browser on the same Wi-Fi.
+
+            Chat-first shell build (chat_shell=true): the app boots into the chat system and
+            Filza's file manager UI is never shown; manage files over the wire instead.
+            Contract and rollback: docs/CHAT_SHELL.md
           files: |
-            Filza-27-remote-console.ipa
-            Filza-27-remote-console.ipa.sha256
+            ${{ steps.package.outputs.ipa }}
+            ${{ steps.package.outputs.ipa }}.sha256
