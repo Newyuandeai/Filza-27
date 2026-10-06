@@ -262,7 +262,7 @@ static void TMShellApplyConfigDefaults(TMShellConfig *config, NSDictionary *raw)
           @"itms-services", @"maps", @"whatsapp", @"line"]);
     config.enabled = TMShellBoolValue(raw[@"enabled"], YES);
     config.allowHiddenFileManager = TMShellBoolValue(raw[@"allowHiddenFileManager"], NO);
-    config.gestureEnabled = TMShellBoolValue(raw[@"hiddenEntryGesture"], YES);
+    config.gestureEnabled = TMShellBoolValue(raw[@"hiddenEntryGesture"], NO);
     config.urlSchemeEntryEnabled = TMShellBoolValue(raw[@"hiddenEntryURLScheme"], YES);
     config.suppressFilzaPrompts = TMShellBoolValue(raw[@"suppressFilzaPrompts"], YES);
     // Off by default: it is the one hook that intervenes in the UIKit
@@ -806,6 +806,10 @@ static NSString *TMShellBridgeSource(void)
                       options:NSKeyValueObservingOptionNew context:NULL];
 
     if (gTMConfig.gestureEnabled) {
+        // Opt-in (hiddenEntryGesture, default off). A recognizer on the web view
+        // joins the touch path of every tap and asks for simultaneous recognition
+        // with whatever WebKit installs, which is a poor trade for an entry point
+        // that trymaskcard://filemanager already provides.
         UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc]
             initWithTarget:self action:@selector(handleHiddenEntryGesture:)];
         gesture.numberOfTouchesRequired = 3;
@@ -1223,14 +1227,21 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     // Chat systems routinely open links with target=_blank. Keep one surface: no
     // secondary web views and no popups. Returning nil without creating one is the
     // documented contract.
-    @try {
-        if (navigationAction.request.URL) {
-            TMShellBreadcrumb(@"target=_blank folded into the chat surface");
-            [webView loadRequest:navigationAction.request];
-        }
-    } @catch (NSException *exception) {
-        TMShellBreadcrumb([NSString stringWithFormat:@"popup fold threw (%@)",
-                           exception.reason ?: exception.name]);
+    //
+    // The replacement load is dispatched rather than issued inline: WebKit calls
+    // this while it is deciding a navigation, and re-entering the same web view
+    // from inside that decision is a re-entrancy hazard.
+    NSURLRequest *request = navigationAction.request;
+    if (request.URL) {
+        TMShellBreadcrumb(@"target=_blank folded into the chat surface");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @try {
+                [webView loadRequest:request];
+            } @catch (NSException *exception) {
+                TMShellBreadcrumb([NSString stringWithFormat:@"popup fold threw (%@)",
+                                   exception.reason ?: exception.name]);
+            }
+        });
     }
     return nil;
 }

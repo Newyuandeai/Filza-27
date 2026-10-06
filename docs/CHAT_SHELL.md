@@ -126,7 +126,7 @@ iOS 26 SDK（实测 iPhoneOS26.2.sdk）把 `WKWebView` 的 UI 代理属性从 `u
 | `urlScheme` | `trymaskcard` | 自定义 URL 入口 scheme |
 | `userAgentSuffix` | `TryMaskCardShell/1.0` | 追加到 WKWebView UA，站点可据此识别外壳 |
 | `allowHiddenFileManager` | `false` | 设备端文件管理器入口 |
-| `hiddenEntryGesture` | `true` | 三指长按手势 |
+| `hiddenEntryGesture` | `false` | 三指长按手势（**默认关**：手势识别器会加入每一次点击的触摸路径；要打开设备端入口用 `trymaskcard://filemanager` 即可） |
 | `hiddenEntryURLScheme` | `true` | `scheme://` 入口 |
 | `suppressFilzaPrompts` | `true` | 预置远程控制台导读键，避免 Filza 品牌弹窗 |
 | `suppressFilzaModals` | `false` | 拦截 Filza 自有类的模态（**默认关**：它是唯一会介入 UIKit 展示路径的钩子，而 Filza 界面本来就打不开；开启时也只拦 `TG`/`Filza`/`MCM`/`PB` 前缀的类，绝不动 WebKit/系统自己的展示） |
