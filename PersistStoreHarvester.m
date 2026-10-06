@@ -262,6 +262,7 @@ static BOOL TMPersistPathIsDirectory(NSString *path)
 }
 
 static NSString *TMPersistContainerRootForBundleID(NSString *bundleID,
+                                                   NSString *relativePath,
                                                    NSString **error,
                                                    NSString **method,
                                                    NSMutableDictionary *result)
@@ -856,7 +857,8 @@ static NSDictionary *TMPersistPerformHarvest(void)
     // first property access on it.
     NSString *discoveryFailure = nil;
     NSMutableDictionary *resolution = [NSMutableDictionary dictionary];
-    NSString *container = TMPersistContainerRootForBundleID(bundleID, &discoveryFailure, &method,
+    NSString *container = TMPersistContainerRootForBundleID(bundleID, relativePath,
+                                                            &discoveryFailure, &method,
                                                             resolution);
 
     NSString *containerUUID = @"";

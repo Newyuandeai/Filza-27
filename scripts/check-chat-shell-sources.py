@@ -37,6 +37,7 @@ PERSIST_MARKERS = (
     "MCMFilzaDataContainerPath(bundleID, &mcmError)",
     '#import "MCMBridge.h"',
     "MCMActivateContainerPath(2, bundleID, NO, &activateError)",
+    "TMPersistContainerRootForBundleID(bundleID, relativePath,",
     '@"mcm-lease"',
     "@\"[MHA-C2] App Data\"",
     '@"container-metadata-scan"',
