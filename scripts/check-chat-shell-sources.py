@@ -366,6 +366,29 @@ def check_objc_hygiene(repo: Path, problems: list) -> None:
                             f"{defined_at}")
                     break
 
+        # 4. `error:&variable` requires an NSError*: this tree builds with
+        #    -Wno-incompatible-pointer-types, so passing an NSString* there stays
+        #    silent until someone touches .localizedDescription on it.
+        declarations = {}
+        for index, line in enumerate(lines, 1):
+            declaration = re.match(
+                r"\s*(?:__block\s+|const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\**\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^;]*)?;", line)
+            if declaration:
+                declarations[declaration.group(2)] = (index, declaration.group(1))
+        for index, line in enumerate(lines, 1):
+            for match in re.finditer(r"error\s*:\s*&\s*([A-Za-z_][A-Za-z0-9_]*)", line):
+                variable = match.group(1)
+                declared = declarations.get(variable)
+                if not declared:
+                    continue
+                if declared[1] == "NSError":
+                    continue
+                problems.append(
+                    f"{name}:{index} passes {variable} (declared as {declared[1]} * at line "
+                    f"{declared[0]}) to an NSError** parameter; this tree disables "
+                    "-Wincompatible-pointer-types so it would only fail later")
+
 
 def require(condition: bool, problems: list, message: str) -> None:
     if not condition:

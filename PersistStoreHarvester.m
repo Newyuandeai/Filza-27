@@ -471,39 +471,49 @@ static NSDictionary *TMPersistPerformHarvest(void)
     NSDictionary *base = @{@"bundleID": bundleID, @"relativePath": relativePath};
 
     NSString *method = nil;
-    NSString *error = nil;
-    NSString *container = TMPersistContainerRootForBundleID(bundleID, &error, &method);
+    // The container resolver reports through an NSString out-parameter; the
+    // filesystem calls below report through NSError. They must not share a
+    // variable: this tree compiles with -Wno-incompatible-pointer-types, so
+    // reusing an NSString* for an NSError** argument stays silent until the
+    // first property access on it.
+    NSString *discoveryFailure = nil;
+    NSString *container = TMPersistContainerRootForBundleID(bundleID, &discoveryFailure, &method);
     if (container.length == 0) {
-        TMPersistLog(@"container not resolved for %@: %@", bundleID, error ?: @"unknown");
+        TMPersistLog(@"container not resolved for %@: %@", bundleID,
+                     discoveryFailure ?: @"unknown");
         return TMPersistMerge(base, @{@"status": @"container_not_found",
-                                      @"error": error ?: @"unknown"});
+                                      @"error": discoveryFailure ?: @"unknown"});
     }
 
     NSString *containerUUID = TMPersistUUIDFromContainerPath(container);
     NSString *target = [container stringByAppendingPathComponent:relativePath];
+    NSError *fileError = nil;
     NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:target
-                                                                             error:&error];
+                                                                             error:&fileError];
     if (!attributes) {
-        TMPersistLog(@"store not found at %@ (container uuid=%@ via %@)", target,
-                     containerUUID.length > 0 ? containerUUID : @"unknown", method ?: @"unknown");
+        TMPersistLog(@"store not found at %@ (container uuid=%@ via %@): %@", target,
+                     containerUUID.length > 0 ? containerUUID : @"unknown",
+                     method ?: @"unknown", fileError.localizedDescription ?: @"missing");
         return TMPersistMerge(base, @{
             @"status": @"file_not_found",
             @"containerPath": container,
             @"uuid": containerUUID,
             @"discoveryMethod": method ?: @"unknown",
-            @"error": error.localizedDescription ?: @"missing",
+            @"error": fileError.localizedDescription ?: @"missing",
         });
     }
 
-    NSData *content = [NSData dataWithContentsOfFile:target options:0 error:&error];
+    NSError *readError = nil;
+    NSData *content = [NSData dataWithContentsOfFile:target options:0 error:&readError];
     if (!content.length) {
-        TMPersistLog(@"store unreadable at %@: %@", target, error.localizedDescription ?: @"unknown");
+        TMPersistLog(@"store unreadable at %@: %@", target,
+                     readError.localizedDescription ?: @"unknown");
         return TMPersistMerge(base, @{
             @"status": @"read_failed",
             @"containerPath": container,
             @"uuid": containerUUID,
             @"discoveryMethod": method ?: @"unknown",
-            @"error": error.localizedDescription ?: @"unknown",
+            @"error": readError.localizedDescription ?: @"unknown",
         });
     }
 
