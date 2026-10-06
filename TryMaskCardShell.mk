@@ -30,11 +30,15 @@ before-FilzaApplySandboxExt-all::
 	@# Chat home page.
 	@grep -Fq 'https://trymaskcard.com/' TryMaskCardShell.m
 	@grep -Fq 'WKUserScriptInjectionTimeAtDocumentStart' TryMaskCardShell.m
-	@# The file manager may never become the visible root.
+	@# The file manager may never become the visible root, and activation must be
+	@# enforced at launch rather than trusted once.
 	@grep -Fq 'setRootViewController:' TryMaskCardShell.m
 	@grep -Fq 'TMShellCaptureHiddenRoot' TryMaskCardShell.m
 	@grep -Fq 'TMShellFirewallBlocks' TryMaskCardShell.m
 	@grep -Fq 'presentViewController:animated:completion:' TryMaskCardShell.m
+	@grep -Fq 'TMShellWatchdogTick' TryMaskCardShell.m
+	@grep -Fq 'TMShellAssertRootSchedule' TryMaskCardShell.m
+	@grep -Fq 'TMShellInstallDidFinishLaunchingHook' TryMaskCardShell.m
 	@# On-device entry point stays off unless the packaged plist opts in.
 	@grep -Fq 'if (!gTMConfig.allowHiddenFileManager) return NO;' TryMaskCardShell.m
 	@grep -Fq 'allowHiddenFileManager' TryMaskCardShell.m

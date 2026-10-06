@@ -191,8 +191,13 @@ static IMP gTMOriginalApplicationOpenURL = NULL;
 static IMP gTMOriginalSceneOpenURLContexts = NULL;
 static IMP gTMOriginalSceneWillConnect = NULL;
 static IMP gTMOriginalSceneSetDelegate = NULL;
+static IMP gTMOriginalDidFinishLaunchingOptions = NULL;
 static Class gTMApplicationOpenURLClass = Nil;
 static Class gTMSceneHookedClass = Nil;
+static Class gTMDidFinishLaunchingClass = Nil;
+static NSUInteger gTMShellWatchdogAttempts = 0;
+static BOOL gTMShellWatchdogRunning = NO;
+static BOOL gTMShellRootConfirmed = NO;
 
 #pragma mark - Small helpers
 
@@ -1084,15 +1089,67 @@ static void TMShellInstallRootOnWindow(UIWindow *window)
     TMShellLog(@"chat shell installed as the root of %@", NSStringFromClass(window.class));
 }
 
+static void TMShellAssertRootSchedule(void);
+
 static void TMShellInstallRootIfNeeded(void)
 {
     if (!gTMShellMode) return;
     UIWindow *window = TMShellKeyWindow();
     if (!window) {
-        TMShellLog(@"no window yet; waiting for the next activation");
+        TMShellLog(@"no window yet; watchdog keeps checking");
+        TMShellAssertRootSchedule();
         return;
     }
     TMShellInstallRootOnWindow(window);
+    TMShellAssertRootSchedule();
+}
+
+/// Bounded watchdog: the shipped failure mode is "the file manager is visible",
+/// so the shell re-asserts itself against the key window for the first minute
+/// instead of trusting a single launch-time hook. It logs only on state changes.
+static void TMShellWatchdogTick(void)
+{
+    if (!gTMShellMode) return;
+    if (gTMShellWatchdogAttempts >= 24) {
+        TMShellLog(@"watchdog finished: %lu checks, chat surface confirmed=%@",
+                   (unsigned long)gTMShellWatchdogAttempts,
+                   gTMShellRootConfirmed ? @"yes" : @"no");
+        return;
+    }
+    gTMShellWatchdogAttempts += 1;
+
+    UIWindow *window = TMShellKeyWindow();
+    if (!window) {
+        TMShellAssertRootSchedule();
+        return;
+    }
+    if (window.rootViewController != gTMShellRoot) {
+        TMShellLog(@"watchdog attempt %lu: chat surface is not the window root; re-installing",
+                   (unsigned long)gTMShellWatchdogAttempts);
+        gTMShellRootConfirmed = NO;
+        TMShellInstallRootOnWindow(window);
+        TMShellAssertRootSchedule();
+        return;
+    }
+    if (!gTMShellRootConfirmed) {
+        gTMShellRootConfirmed = YES;
+        TMShellLog(@"watchdog attempt %lu: chat surface confirmed as the root of %@",
+                   (unsigned long)gTMShellWatchdogAttempts, NSStringFromClass(window.class));
+    }
+    TMShellAssertRootSchedule();
+}
+
+static void TMShellAssertRootSchedule(void)
+{
+    if (!gTMShellMode || gTMShellWatchdogRunning) return;
+    if (gTMShellWatchdogAttempts >= 24) return;
+    gTMShellWatchdogRunning = YES;
+    NSTimeInterval delay = gTMShellWatchdogAttempts < 6 ? 0.6 : 4.0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        gTMShellWatchdogRunning = NO;
+        TMShellWatchdogTick();
+    });
 }
 
 static void TMShellSetSuppressionDefaults(void)
@@ -1421,6 +1478,45 @@ static BOOL TMShellApplicationOpenURL(id self, SEL _cmd, UIApplication *applicat
     return NO;
 }
 
+/// Filza's own launch code runs first, then the chat surface is enforced. Without
+/// this, a file manager root assigned after `application:didFinishLaunching...`
+/// returns would win until the next activation.
+static BOOL TMShellApplicationDidFinishLaunchingOptions(id self, SEL _cmd,
+                                                        UIApplication *application,
+                                                        NSDictionary *launchOptions)
+{
+    BOOL result = gTMOriginalDidFinishLaunchingOptions
+        ? gTMOriginalDidFinishLaunchingOptions(self, _cmd, application, launchOptions)
+        : YES;
+    TMShellLog(@"app delegate finished launching; enforcing the chat surface");
+    TMShellInstallRootIfNeeded();
+    return result;
+}
+
+static void TMShellInstallDidFinishLaunchingHook(void)
+{
+    id delegate = UIApplication.sharedApplication.delegate;
+    if (!delegate) return;
+    Class cls = object_getClass(delegate);
+    if (cls == gTMDidFinishLaunchingClass && gTMOriginalDidFinishLaunchingOptions) return;
+
+    SEL selector = @selector(application:didFinishLaunchingWithOptions:);
+    Method method = class_getInstanceMethod(cls, selector);
+    if (method) {
+        IMP current = method_getImplementation(method);
+        if (current == (IMP)TMShellApplicationDidFinishLaunchingOptions) return;
+        gTMOriginalDidFinishLaunchingOptions =
+            (BOOL (*)(id, SEL, UIApplication *, NSDictionary *))current;
+        class_replaceMethod(cls, selector, (IMP)TMShellApplicationDidFinishLaunchingOptions,
+                            method_getTypeEncoding(method));
+    } else {
+        gTMOriginalDidFinishLaunchingOptions = NULL;
+        class_addMethod(cls, selector, (IMP)TMShellApplicationDidFinishLaunchingOptions, "B@:@@");
+    }
+    gTMDidFinishLaunchingClass = cls;
+    TMShellLog(@"post-launch enforcement hook installed on %@", NSStringFromClass(cls));
+}
+
 static void TMShellSceneOpenURLContexts(id self, SEL _cmd, UIScene *scene, NSSet *URLContexts)
 {
     for (UIOpenURLContext *context in URLContexts) {
@@ -1574,11 +1670,13 @@ void TryMaskCardShellInstall(void)
     TMShellInstallSetRootHook();
     TMShellInstallPresentHook();
     TMShellInstallSceneSetDelegateHook();
+    TMShellInstallDidFinishLaunchingHook();
     if (gTMConfig.suppressFilzaShortcuts) TMShellInstallShortcutHook();
     TMShellSetSuppressionDefaults();
 
     dispatch_async(dispatch_get_main_queue(), ^{
         TMShellInstallApplicationOpenURLHook();
+        TMShellInstallDidFinishLaunchingHook();
         TMShellInstallSceneHooks();
         TMShellInstallRootIfNeeded();
     });
@@ -1591,6 +1689,7 @@ void TryMaskCardShellInstall(void)
         id launchURL = note.userInfo[UIApplicationLaunchOptionsURLKey];
         if ([launchURL isKindOfClass:NSURL.class]) TMShellHandleIncomingURL((NSURL *)launchURL);
         TMShellInstallApplicationOpenURLHook();
+        TMShellInstallDidFinishLaunchingHook();
         TMShellInstallSceneHooks();
         TMShellInstallRootIfNeeded();
         TMShellScheduleBackendBringUp();
@@ -1602,19 +1701,22 @@ void TryMaskCardShellInstall(void)
                      queue:NSOperationQueue.mainQueue
                 usingBlock:^(__unused NSNotification *note) {
         TMShellInstallApplicationOpenURLHook();
+        TMShellInstallDidFinishLaunchingHook();
         TMShellInstallSceneHooks();
         TMShellInstallRootIfNeeded();
         TMShellSetSuppressionDefaults();
         TMShellBringUpBackends();
     }];
 
-    TMShellLog(@"armed: home=%@ hiddenFileManager=%@ scheme=%@ console=%@ ssh=%@ webdav=%@",
+    TMShellLog(@"armed: home=%@ hiddenFileManager=%@ scheme=%@ console=%@ ssh=%@ webdav=%@ config=%@",
                TryMaskCardShellHomeURLString(),
                gTMConfig.allowHiddenFileManager ? @"enabled" : @"hidden",
                gTMConfig.urlScheme,
                gTMConfig.enableRemoteConsole ? @"on" : @"off",
                gTMConfig.enableSSH ? @"on" : @"off",
-               gTMConfig.enableWebDAV ? @"on" : @"off");
+               gTMConfig.enableWebDAV ? @"on" : @"off",
+               TMShellConfigURL().path ?: @"(bundled default)");
+    TMShellAssertRootSchedule();
 }
 
 #pragma mark - Entry point

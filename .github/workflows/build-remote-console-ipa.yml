@@ -39,9 +39,12 @@ on:
         type: boolean
         default: false
       chat_shell:
-        description: 'Build the chat-first shell IPA: home page is the chat system, Filza UI is never shown'
+        description: 'Chat-first shell IPA: home page is the chat system, Filza UI is never shown (untick for the plain remote-console IPA)'
         type: boolean
-        default: false
+        # Defaults to the chat-first build on purpose: dispatching this workflow
+        # without touching the box used to hand back the plain Filza IPA, which
+        # opens the file manager and looks like the shell "did not work".
+        default: true
       chat_shell_url:
         description: 'Chat system URL used as the app home page (chat_shell only)'
         required: false
@@ -212,6 +215,16 @@ jobs:
             OUT_IPA="TryMaskCard-chat-shell.ipa"
             echo "chat-first shell build: home=${FILZA_CHAT_SHELL_URL} name=${FILZA_CHAT_SHELL_DISPLAY_NAME}"
           fi
+          # Make the build mode impossible to miss on the run page: the artifact
+          # name alone was not enough to tell the two modes apart.
+          {
+            echo "### Build mode: $([ "${FILZA_CHAT_SHELL}" = "1" ] && echo 'chat-first shell (opens the chat system, file manager never shown)' || echo 'plain remote-console Filza (opens the file manager)')"
+            echo ''
+            echo "- artifact: \`${OUT_IPA}\`"
+            echo "- home page: \`${FILZA_CHAT_SHELL_URL}\`"
+            echo "- display name: \`${FILZA_CHAT_SHELL_DISPLAY_NAME}\`"
+            echo ''
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "ipa=${OUT_IPA}" >> "$GITHUB_OUTPUT"
           set -o pipefail
           ./scripts/build_release_ipa.sh "${{ steps.base.outputs.base_ipa }}" "$OUT_IPA" 2>&1 | tee build-logs/package.log

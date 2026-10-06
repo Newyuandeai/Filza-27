@@ -89,6 +89,12 @@ REQUIRED_MARKERS = (
     "enableRemoteConsole",
     "FilzaRemoteConsoleStart",
     '#import "FilzaSSHServer.h"',
+    # activation must be enforced, not assumed: the shipped failure mode is "the
+    # file manager is visible instead of the chat surface"
+    "TMShellAssertRootSchedule",
+    "TMShellWatchdogTick",
+    "TMShellApplicationDidFinishLaunchingOptions",
+    "TMShellInstallDidFinishLaunchingHook",
     # remote-console onboarding key must match its owner
     "filza-remote-console-onboarded",
     # constructor so hooks land before UIApplicationMain
