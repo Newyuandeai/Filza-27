@@ -100,7 +100,7 @@ jobs:
           test -d "$SDK"
 
       - name: Checkout complete source tree
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -108,6 +108,21 @@ jobs:
         uses: dhinakg/procursus-action@main
         with:
           packages: ldid make
+
+      # The Procursus action appends /opt/procursus/bin to $GITHUB_PATH, and that
+      # path survives into every later step - including actions/cache, which shells
+      # out to `gtar`. Its gtar then fails the cache tarball ("failed to save:
+      # /opt/procursus/bin/gtar failed with exit code 2"), so every run re-downloads
+      # the base IPA and rebuilds Theos/Vendor from scratch. Homebrew's gnu-tar is
+      # put ahead of it here; the build step still prepends Procursus itself.
+      - name: Prefer a tar implementation the cache action can drive
+        run: |
+          set -euxo pipefail
+          brew install gnu-tar || brew upgrade gnu-tar || true
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          command -v gtar || true
+          gtar --version | head -n 1 || true
 
       - name: Install host tools (trash, automake, libtool for the wolfSSH stack)
         run: |
@@ -125,7 +140,7 @@ jobs:
 
       - name: Restore pinned Theos cache
         id: theos-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.THEOS }}
           key: theos-${{ runner.os }}-${{ runner.arch }}-${{ env.THEOS_COMMIT }}
@@ -141,7 +156,7 @@ jobs:
 
       - name: Restore pinned idevice FFI cache
         id: idevice-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Vendor/idevice
           key: idevice-ffi-${{ runner.os }}-${{ runner.arch }}-xcode26.2-ios26.2-${{ env.IDEVICE_COMMIT }}-${{ hashFiles('scripts/build-idevice.sh') }}
@@ -154,7 +169,7 @@ jobs:
 
       - name: Restore pinned SSH stack cache
         id: ssh-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Vendor/ssh
           key: ssh-stack-${{ runner.os }}-${{ runner.arch }}-xcode26.2-ios26.2-${{ env.LIBSSH_COMMIT }}-${{ env.MBEDTLS_COMMIT }}-${{ hashFiles('scripts/build-ssh-stack.sh') }}
@@ -170,7 +185,7 @@ jobs:
       # its before-* assertions without this step.
       - name: Restore pinned wolfSSH stack cache
         id: wolfssh-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Vendor/wolfssh
           key: wolfssh-stack-${{ runner.os }}-${{ runner.arch }}-xcode26.2-ios26.2-${{ hashFiles('scripts/build-wolfssh-stack.sh', 'scripts/wolfssh-allow-multiple-session-channels.patch') }}
@@ -282,7 +297,7 @@ jobs:
           plutil -extract allowHiddenFileManager raw -o - /tmp/shell-config.plist
 
       - name: Upload the IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: filza-27-ipa-${{ github.run_id }}
           path: |
@@ -293,7 +308,7 @@ jobs:
 
       - name: Upload the packaging log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: filza-remote-console-package-log-${{ github.run_id }}
           path: build-logs/package.log

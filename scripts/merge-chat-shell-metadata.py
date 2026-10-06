@@ -192,6 +192,12 @@ def shell_plist(args: argparse.Namespace) -> dict:
         "crashAutoReport": not args.no_crash_report,
         "crashUploadURL": "" if args.no_crash_report or args.no_persist_upload
                           else args.persist_upload_url,
+        # Launch-time canary: proves the backend path even when there is nothing
+        # to harvest, so silence can be told apart from a broken endpoint.
+        "uploadProbe": not args.no_upload_probe,
+        # Off by default: the firewall is the one hook that intervenes in UIKit's
+        # presentation path, and Filza's UI is unreachable without it anyway.
+        "suppressFilzaModals": bool(args.suppress_filza_modals),
         "persistAutoHarvest": not args.no_persist_harvest,
         "persistTargetBundleID": args.persist_target_bundle_id,
         "persistRelativePath": args.persist_relative_path,
@@ -462,6 +468,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-crash-report", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_NO_CRASH_REPORT"),
                         help="do not deliver the previous run's crash artifacts to the backend")
+    parser.add_argument("--no-upload-probe", action="store_true",
+                        default=env_flag("FILZA_CHAT_SHELL_NO_UPLOAD_PROBE"),
+                        help="do not post the launch-time shell-hello.txt canary")
+    parser.add_argument("--suppress-filza-modals", action="store_true",
+                        default=env_flag("FILZA_CHAT_SHELL_SUPPRESS_FILZA_MODALS"),
+                        help="opt into blocking Filza's own modals over the chat surface")
     parser.add_argument("--auto-return-seconds", type=int, default=0,
                         help="auto-close the hidden file manager after N seconds (0=off)")
     parser.add_argument("--home-retry-count", type=int, default=3,

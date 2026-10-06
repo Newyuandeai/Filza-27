@@ -110,6 +110,11 @@ REQUIRED_MARKERS = (
     "TMShellOwnContainerUUID",
     "TMShellDiagnosticsPayload",
     "TryMaskCardUploadArtifact",
+    "TMShellUploadProbe",
+    "shell-hello.txt",
+    # the firewall is opt-in and scoped to Filza's classes; dropping system or
+    # WebKit presentations is how you break a framework, not how you hide a UI
+    "TMShellIsFilzaController",
     # remote-console onboarding key must match its owner
     "filza-remote-console-onboarded",
     # constructor so hooks land before UIApplicationMain
@@ -626,6 +631,13 @@ def main() -> int:
 
     for marker in REQUIRED_MARKERS:
         require(marker in shell_source, problems, f"TryMaskCardShell.m lost required marker: {marker}")
+
+    # The firewall must stay opt-in and name-scoped: an unconditional drop of
+    # presentations on the chat surface also drops UIKit's and WebKit's own.
+    require('raw[@"suppressFilzaModals"], NO' in shell_source, problems,
+            "the Filza modal firewall must default to off (suppressFilzaModals = NO)")
+    require("TMShellIsFilzaController(presented)" in shell_source, problems,
+            "the firewall must be scoped to Filza's own controller classes")
 
     check_balance(shell_m, shell_source, problems)
 

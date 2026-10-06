@@ -84,7 +84,7 @@ jobs:
           echo "Stable release source: verifier #$RUN_NUMBER ($RUN_ID), $VERIFIED_SHA"
 
       - name: Checkout exact verified commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ steps.verified.outputs.sha }}
 

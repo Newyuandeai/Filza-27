@@ -27,7 +27,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Stage the console bundle
         run: bash scripts/stage-remote-console-assets.sh

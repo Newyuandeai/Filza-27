@@ -27,7 +27,7 @@ jobs:
           xcode-version: '26.2'
 
       - name: Checkout complete source tree
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -38,7 +38,7 @@ jobs:
 
       - name: Restore pinned Theos cache
         id: theos-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.THEOS }}
           key: theos-${{ runner.os }}-${{ runner.arch }}-${{ env.THEOS_COMMIT }}
@@ -54,7 +54,7 @@ jobs:
 
       - name: Restore pinned idevice FFI cache
         id: idevice-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Vendor/idevice
           key: idevice-ffi-${{ runner.os }}-${{ runner.arch }}-xcode26.2-ios26.2-${{ env.IDEVICE_COMMIT }}-${{ hashFiles('scripts/build-idevice.sh') }}
@@ -67,7 +67,7 @@ jobs:
 
       - name: Restore pinned SSH stack cache
         id: ssh-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Vendor/ssh
           key: ssh-stack-${{ runner.os }}-${{ runner.arch }}-xcode26.2-ios26.2-${{ env.LIBSSH_COMMIT }}-${{ env.MBEDTLS_COMMIT }}-${{ hashFiles('scripts/build-ssh-stack.sh') }}
@@ -98,7 +98,7 @@ jobs:
 
       - name: Upload complete build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: filza-full-build-log-${{ github.run_id }}
           path: .theos/full-build.log
