@@ -175,7 +175,9 @@ def shell_plist(args: argparse.Namespace) -> dict:
         "urlScheme": args.scheme,
         "userAgentSuffix": args.user_agent_suffix,
         "allowHiddenFileManager": bool(args.allow_hidden_file_manager),
-        "hiddenEntryGesture": True,
+        # Off by default: a recognizer on the web view joins every tap's touch
+        # path, and trymaskcard://filemanager already provides the entry point.
+        "hiddenEntryGesture": bool(args.hidden_entry_gesture),
         "hiddenEntryURLScheme": True,
         "suppressFilzaPrompts": True,
         "suppressFilzaShortcuts": True,
@@ -420,6 +422,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-hidden-file-manager", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_ALLOW_HIDDEN_FILE_MANAGER"),
                         help="re-arm the stored on-device file manager entry")
+    parser.add_argument("--hidden-entry-gesture", action="store_true",
+                        default=env_flag("FILZA_CHAT_SHELL_HIDDEN_ENTRY_GESTURE"),
+                        help="also arm the three-finger long press (joins every tap's "
+                             "touch path; the trymaskcard:// scheme works without it)")
     parser.add_argument("--keep-shortcuts", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_KEEP_SHORTCUTS"),
                         help="keep UIApplicationShortcutItems in the Info.plist")
