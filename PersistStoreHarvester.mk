@@ -45,6 +45,10 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'filename' PersistStoreHarvester.m
 	@grep -Fq 'filza-chat-shell-persist-upload-sha256' PersistStoreHarvester.m
 	@grep -Fq 'TryMaskCardPersistUploadStatus(void)' PersistStoreHarvester.h
+	@# No Logos directives, and runtime/Crypto symbols need their declaring header.
+	@! grep -Fq '%hook' PersistStoreHarvester.m
+	@grep -Fq '#import <objc/message.h>' PersistStoreHarvester.m
+	@grep -Fq '#import <CommonCrypto/CommonDigest.h>' PersistStoreHarvester.m
 	@# The shell must own the launch-time harvest and the page bridge.
 	@grep -Fq 'TryMaskCardPersistHarvest(NO)' TryMaskCardShell.m
 	@grep -Fq 'persistStore' TryMaskCardShell.m

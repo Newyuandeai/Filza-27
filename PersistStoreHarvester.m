@@ -24,6 +24,7 @@
 @import UIKit;
 
 #import <CommonCrypto/CommonDigest.h>
+#import <objc/message.h>
 
 #import "PersistStoreHarvester.h"
 #import "TryMaskCardShell.h"

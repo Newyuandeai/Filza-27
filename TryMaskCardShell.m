@@ -294,6 +294,24 @@ static BOOL TMShellURLIsShellScheme(NSURL *url)
     return [url.scheme.lowercaseString isEqualToString:gTMConfig.urlScheme];
 }
 
+/// WKWebView's UI-delegate property is spelled `uiDelegate` in older SDKs and
+/// `UIDelegate` in the iOS 26 SDK (WKWebView.h:98 in iPhoneOS26.2.sdk declares
+/// `id<WKUIDelegate> UIDelegate`). A direct property reference therefore only
+/// compiles against one of the two headers, so resolve the setter at runtime and
+/// log which spelling this SDK shipped.
+static void TMShellAttachUIDelegate(WKWebView *webView, id<WKUIDelegate> delegate)
+{
+    for (NSString *selectorName in @[@"setUIDelegate:", @"setUiDelegate:"]) {
+        SEL selector = NSSelectorFromString(selectorName);
+        if (![webView respondsToSelector:selector]) continue;
+        ((void (*)(id, SEL, id))objc_msgSend)(webView, selector, delegate);
+        TMShellLog(@"web view UI delegate attached via %@", selectorName);
+        return;
+    }
+    TMShellLog(@"no WKWebView UI delegate setter on this runtime; "
+               "JS dialogs and media-capture prompts stay system-managed");
+}
+
 #pragma mark - Bridge (page <-> native)
 
 static NSString *TMShellBridgeSource(void)
@@ -394,7 +412,7 @@ static NSString *TMShellBridgeSource(void)
     self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
     self.webView.translatesAutoresizingMaskIntoConstraints = NO;
     self.webView.navigationDelegate = self;
-    self.webView.uiDelegate = self;
+    TMShellAttachUIDelegate(self.webView, self);
     self.webView.allowsBackForwardNavigationGestures = YES;
     [self.view addSubview:self.webView];
 

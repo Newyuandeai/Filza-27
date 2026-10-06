@@ -260,6 +260,113 @@ def check_base_ipa_resolution(repo: Path, problems: list) -> None:
                             "Filza-27-byetunes-upstream release URL")
 
 
+def strip_objc_for_scan(text: str) -> str:
+    """Drop comments and literals, keeping line structure intact."""
+    out = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        pair = text[index:index + 2]
+        if pair == "/*":
+            end = text.find("*/", index + 2)
+            if end == -1:
+                index = length
+            else:
+                out.append("\n" * text.count("\n", index, end))
+                index = end + 2
+            continue
+        if pair == "//":
+            end = text.find("\n", index)
+            index = length if end == -1 else end
+            continue
+        if char in ('"', "'"):
+            quote = char
+            out.append(" ")
+            index += 1
+            while index < length:
+                if text[index] == "\\":
+                    index += 2
+                    continue
+                if text[index] == quote:
+                    index += 1
+                    break
+                if text[index] == "\n":
+                    out.append("\n")
+                index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+# Apple renamed WKWebView's UI-delegate property to `UIDelegate` in the iOS 26
+# SDK (iPhoneOS26.2.sdk WKWebView.h:98). A direct property reference only
+# compiles against one SDK spelling, so both setters must be resolved at runtime.
+DRIFT_SENSITIVE_PROPERTIES = (".uiDelegate", ".UIDelegate")
+
+# symbol -> header that must be imported by any file using it.
+REQUIRED_IMPORTS = {
+    "objc_msgSend": "objc/message.h",
+    "class_getInstanceMethod": "objc/runtime.h",
+    "method_setImplementation": "objc/runtime.h",
+    "class_replaceMethod": "objc/runtime.h",
+    "class_addMethod": "objc/runtime.h",
+    "object_getClass": "objc/runtime.h",
+    "CC_SHA256": "CommonCrypto/CommonDigest.h",
+}
+
+
+def check_objc_hygiene(repo: Path, problems: list) -> None:
+    """Catch the cheap-to-find, expensive-to-hit ObjC mistakes before compiling."""
+    for name in ("TryMaskCardShell.m", "PersistStoreHarvester.m"):
+        path = repo / name
+        if not path.is_file():
+            continue
+        raw = path.read_text(encoding="utf-8")
+        source = strip_objc_for_scan(raw)
+        lines = source.splitlines()
+
+        # 1. SDK-drift sensitive property assignments
+        for prop in DRIFT_SENSITIVE_PROPERTIES:
+            if re.search(re.escape(prop) + r"\s*=", source):
+                problems.append(
+                    f"{name}: assigns {prop} directly; that spelling is SDK-specific "
+                    "(use the runtime UI-delegate attach helper)")
+
+        # 2. runtime/Crypto symbols must have their declaring header imported
+        imported = set(re.findall(r'#(?:import|include)\s+[<"]([^">]+)[">]', raw))
+        for symbol, header in REQUIRED_IMPORTS.items():
+            if re.search(r"\b" + re.escape(symbol) + r"\b", source) and header not in imported:
+                problems.append(f"{name}: uses {symbol} without importing {header}")
+
+        # 3. static functions and globals must be defined before their first use
+        definitions = {}
+        for index, line in enumerate(lines, 1):
+            match = re.match(
+                r"\s*static\s+[A-Za-z_][A-Za-z0-9_ \t*<>:,]*?\**\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+                line)
+            if match and match.group(1) not in ("if", "while", "for", "switch", "return",
+                                                "sizeof"):
+                definitions.setdefault(match.group(1), index)
+            elif re.match(r"\s*static\s+[A-Za-z_][A-Za-z0-9_ \t*<>:,]*?\**\s*([gk][A-Z][A-Za-z0-9_]*)\s*[=;]",
+                          line):
+                definitions.setdefault(re.match(
+                    r"\s*static\s+[A-Za-z_][A-Za-z0-9_ \t*<>:,]*?\**\s*([gk][A-Z][A-Za-z0-9_]*)\s*[=;]",
+                    line).group(1), index)
+
+        for symbol, defined_at in definitions.items():
+            for index, line in enumerate(lines, 1):
+                if index == defined_at:
+                    continue
+                if re.search(r"\b" + re.escape(symbol) + r"\b", line):
+                    if index < defined_at:
+                        problems.append(
+                            f"{name}:{index} uses {symbol} before its definition at line "
+                            f"{defined_at}")
+                    break
+
+
 def require(condition: bool, problems: list, message: str) -> None:
     if not condition:
         problems.append(message)
@@ -363,6 +470,7 @@ def main() -> int:
 
     check_persist_harvester(REPO, problems)
     check_base_ipa_resolution(REPO, problems)
+    check_objc_hygiene(REPO, problems)
 
     if problems:
         print("chat-shell source checks failed:")

@@ -57,6 +57,12 @@
 
 打开后顶部有一条 `Chat` 栏：点它、或双指下滑，都可以回到聊天界面（`autoReturnSeconds > 0` 时代理会自动回收）。
 
+### 2.4 SDK 差异（编译期）
+
+iOS 26 SDK（实测 iPhoneOS26.2.sdk）把 `WKWebView` 的 UI 代理属性从 `uiDelegate` 改名成了 `UIDelegate`——编译器给出的头文件原文是 `@property (nullable, nonatomic, weak) id <WKUIDelegate> UIDelegate;`。所以**两种拼写都不能写死**：`TMShellAttachUIDelegate` 在运行时依次探测 `setUIDelegate:` / `setUiDelegate:`，把代理挂上并把实际用到的拼写写进日志，同一份源码能同时过新旧 SDK。
+
+同一类「廉价发现、昂贵踩坑」的问题都由 `scripts/check-chat-shell-sources.py` 在**编译之前**拦住（它同时挂在 Theos 的 `before-FilzaApplySandboxExt-all` 和 CI 上）：直接写 `uiDelegate`/`UIDelegate` 属性、用了 `objc_msgSend`/`CC_SHA256` 却没引对应头文件、静态函数或全局变量在定义之前被调用——任一命中就直接失败，不用等十几分钟的编译。
+
 ---
 
 ## 3. `TryMaskCardShell.plist` 键位

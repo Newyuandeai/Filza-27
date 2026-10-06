@@ -50,6 +50,13 @@ before-FilzaApplySandboxExt-all::
 	@# No Logos directives: this repo hooks through the ObjC runtime.
 	@! grep -Fq '%hook' TryMaskCardShell.m
 	@! grep -Fq '%end' TryMaskCardShell.m
+	@# Apple renamed WKWebView's UI-delegate property to `UIDelegate` in the iOS 26
+	@# SDK, so neither spelling may be referenced as a property directly. The
+	@# runtime attach helper resolves whichever setter this SDK shipped.
+	@! grep -Eq '\.(uiDelegate|UIDelegate)[[:space:]]*=' TryMaskCardShell.m
+	@grep -Fq 'TMShellAttachUIDelegate' TryMaskCardShell.m
+	@grep -Fq '@"setUIDelegate:"' TryMaskCardShell.m
+	@grep -Fq '@"setUiDelegate:"' TryMaskCardShell.m
 	@# Tweak.m must route its hidden-root repair through the shell accessor.
 	@grep -Fq '#import "TryMaskCardShell.h"' Tweak.m
 	@grep -Fq 'TryMaskCardShellHiddenRootController' Tweak.m
