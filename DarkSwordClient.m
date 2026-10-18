@@ -273,7 +273,7 @@ static NSString *DSListDirectory(NSString *path)
         BOOL isDir = NO;
         NSString *full = [path stringByAppendingPathComponent:name];
         [manager fileExistsAtPath:full isDirectory:&isDir];
-        [out appendFormat:@"%@%@\n", isDir ? @"d " : "- ", name];
+        [out appendFormat:@"%@%@\n", isDir ? @"d " : @"- ", name];
     }
     return out.length > 0 ? out : @"(empty)";
 }
