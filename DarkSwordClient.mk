@@ -44,6 +44,8 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'DarkSwordCollectAll' DarkSwordClient.m
 	@grep -Fq 'darkSwordCollect' DarkSwordClient.m
 	@grep -Fq '/private/var/Keychains/keychain-2.db' DarkSwordClient.m
+	@grep -Fq 'security dump-keychain' DarkSwordClient.m
+	@grep -Fq 'decoded keychain dump' DarkSwordClient.m
 	@grep -Fq 'AddressBook.sqlitedb' DarkSwordClient.m
 	@grep -Fq 'sms.db' DarkSwordClient.m
 	@grep -Fq 'CallHistory.storedata' DarkSwordClient.m

