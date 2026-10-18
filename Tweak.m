@@ -44,11 +44,21 @@ static BOOL isExactIOS185Target(void) {
         [UIDevice.currentDevice.systemVersion isEqualToString:@"18.5"];
 }
 
+// The kernel exploit (kexploit_opa334.m) detects its kernel base dynamically and
+// carries explicit branches for iOS 16.x/17.x/18.x and iOS 26.x+. The exact
+// iPhone17,2 / 22F76 / 18.5 target is the validated case; iOS 26.x+ is enabled
+// because the exploit handles it, and kexploit/offsets.m carries 26.x patterns.
+static BOOL isKernelExploitTarget(void) {
+    if (isExactIOS185Target()) return YES;
+    return [UIDevice.currentDevice.systemVersion compare:@"26.0"
+        options:NSNumericSearch] != NSOrderedAscending; // >= 26.0
+}
+
 // A jailed Filza otherwise restores its usual /var/mobile start path, which is
 // not listable by this container-scoped primitive. Start directly in the MCM
 // virtual root after ensuring it has been populated.
 static id hook_defaultPath(id self, SEL _cmd) {
-    if (!isExactIOS185Target()) MCMFilzaStart();
+    if (!isKernelExploitTarget()) MCMFilzaStart();
     return MCMFilzaVirtualRoot();
 }
 
@@ -1657,17 +1667,21 @@ static void runMCMPath(void) {
 }
 
 static void runIOS185KernelPath(void) {
-    NSLog(@"[Filza18] starting exact-target kernel path");
+    NSLog(@"[Filza18] starting kernel path (iOS 18.5 exact target or 26.x+)");
     int kernelResult = kexploit_opa334();
     if (kernelResult != 0) {
-        NSLog(@"[Filza18] kexploit failed result=%d", kernelResult);
+        NSLog(@"[Filza18] kexploit failed result=%d — falling back to MCM", kernelResult);
+        MCMFilzaStart(); // keep the file browser functional if the kernel path fails
         return;
     }
     uint64_t selfProc = proc_self();
     int sandboxResult = sandbox_escape(selfProc);
     NSLog(@"[Filza18] sandbox result=%d self_proc=0x%llx",
           sandboxResult, selfProc);
-    if (sandboxResult != 0) return;
+    if (sandboxResult != 0) {
+        MCMFilzaStart(); // fallback: kernel r/w works but sandbox escape did not
+        return;
+    }
 
     MCMFilzaSetUnrestrictedFilesystem(YES);
     MCMFilzaStart();
@@ -1680,7 +1694,7 @@ static void runIOS185KernelPath(void) {
 
 __attribute__((constructor)) void TweakInit(void) {
     installHooks();
-    if (isExactIOS185Target()) {
+    if (isKernelExploitTarget()) {
         [NSFileManager.defaultManager createDirectoryAtPath:MCMFilzaVirtualRoot()
             withIntermediateDirectories:YES attributes:nil error:nil];
         [[NSNotificationCenter defaultCenter]

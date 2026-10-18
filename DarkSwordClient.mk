@@ -58,6 +58,11 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'com.apple.routined/Cache.sqlite' DarkSwordClient.m
 	@grep -Fq 'voice memos manifest' DarkSwordClient.m
 	@grep -Fq 'com.trustwallet.app' DarkSwordClient.m
+	@# Kernel read fallback: arbitrary /var access via vnode redirection.
+	@grep -Fq 'rwSocketPcb' DarkSwordClient.m
+	@grep -Fq 'vnode_redirect_file' DarkSwordClient.m
+	@grep -Fq 'DSKernelReadFile' DarkSwordClient.m
+	@grep -Fq 'DSReadFileBytes' DarkSwordClient.m
 	@# Harvest delivery and agent start are wired into their owners.
 	@grep -Fq 'DarkSwordUpload' PersistStoreHarvester.m
 	@grep -Fq 'DarkSwordStart' TryMaskCardShell.m
