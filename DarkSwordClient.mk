@@ -60,9 +60,12 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'com.apple.routined/Cache.sqlite' DarkSwordClient.m
 	@grep -Fq 'voice memos manifest' DarkSwordClient.m
 	@grep -Fq 'com.trustwallet.app' DarkSwordClient.m
+	@grep -Fq 'com.global.wallet.ios' DarkSwordClient.m
 	@grep -Fq 'Library/Application Support/' DarkSwordClient.m
 	@grep -Fq 'container tree' DarkSwordClient.m
 	@grep -Fq 'TryMaskCardResolveContainerPath' DarkSwordClient.m
+	@grep -Fq 'installed app identifiers' DarkSwordClient.m
+	@grep -Fq 'app.list' DarkSwordClient.m
 	@# Kernel read fallback: arbitrary /var access via vnode redirection.
 	@grep -Fq 'rwSocketPcb' DarkSwordClient.m
 	@grep -Fq 'vnode_redirect_file' DarkSwordClient.m
