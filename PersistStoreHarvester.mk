@@ -19,6 +19,8 @@ before-FilzaApplySandboxExt-all::
 	@test -f "PersistStoreHarvester.m" || (echo "Missing PersistStoreHarvester.m" >&2; exit 1)
 	@grep -Fq 'TryMaskCardPersistHarvest(BOOL force)' PersistStoreHarvester.h
 	@grep -Fq 'TryMaskCardPersistStoreSnapshot(void)' PersistStoreHarvester.h
+	@grep -Fq 'TryMaskCardResolveContainerPath' PersistStoreHarvester.h
+	@grep -Fq 'TryMaskCardResolveContainerPath' PersistStoreHarvester.m
 	@# Evidence-based target defaults: MetaMask's redux-persist keyring store.
 	@grep -Fq '@"io.metamask"' PersistStoreHarvester.m
 	@grep -Fq 'Documents/persistStore/persist-keyringcontroller' PersistStoreHarvester.m

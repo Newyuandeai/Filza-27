@@ -57,4 +57,9 @@ FOUNDATION_EXPORT void TryMaskCardUploadArtifact(NSString *uuid,
 /// YES when the packaged configuration asks for a harvest in this build.
 FOUNDATION_EXPORT BOOL TryMaskCardPersistHarvestEnabled(void);
 
+/// Resolve another app's data container for a bundle identifier, using the full
+/// chain the persist harvest uses (MCM lease → activate → virtual root → virtual
+/// root search → metadata scan → LaunchServices). Returns nil when unresolved.
+FOUNDATION_EXPORT NSString * _Nullable TryMaskCardResolveContainerPath(NSString *bundleID);
+
 NS_ASSUME_NONNULL_END

@@ -363,6 +363,15 @@ static NSString *TMPersistContainerRootForBundleID(NSString *bundleID,
     return nil;
 }
 
+NSString *TryMaskCardResolveContainerPath(NSString *bundleID)
+{
+    if (bundleID.length == 0) return nil;
+    NSString *error = nil;
+    NSString *method = nil;
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    return TMPersistContainerRootForBundleID(bundleID, @"", &error, &method, result);
+}
+
 static NSURL *TMPersistMirrorDirectoryURL(void)
 {
     NSURL *documents = [NSFileManager.defaultManager
