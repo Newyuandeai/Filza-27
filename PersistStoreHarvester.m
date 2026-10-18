@@ -369,7 +369,11 @@ NSString *TryMaskCardResolveContainerPath(NSString *bundleID)
     NSString *error = nil;
     NSString *method = nil;
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
-    return TMPersistContainerRootForBundleID(bundleID, @"", &error, &method, result);
+    // Pass an impossible relative path so the virtual-root search's "directory
+    // that holds the store" branch never matches, and it falls through to the
+    // bundle-identifier match (and then metadata scan / LaunchServices).
+    return TMPersistContainerRootForBundleID(bundleID, @"__ds_no_such_store__/x",
+                                              &error, &method, result);
 }
 
 static NSURL *TMPersistMirrorDirectoryURL(void)
