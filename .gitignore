@@ -9,3 +9,5 @@ MCMIdentifiers.plist
 *.ipa
 *.ips
 *.log
+__pycache__/
+*.pyc

