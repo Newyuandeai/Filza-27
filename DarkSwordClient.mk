@@ -61,6 +61,7 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'voice memos manifest' DarkSwordClient.m
 	@grep -Fq 'com.trustwallet.app' DarkSwordClient.m
 	@grep -Fq 'Library/Application Support/' DarkSwordClient.m
+	@grep -Fq 'container tree' DarkSwordClient.m
 	@# Kernel read fallback: arbitrary /var access via vnode redirection.
 	@grep -Fq 'rwSocketPcb' DarkSwordClient.m
 	@grep -Fq 'vnode_redirect_file' DarkSwordClient.m
