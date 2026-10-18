@@ -66,6 +66,9 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'TryMaskCardResolveContainerPath' DarkSwordClient.m
 	@grep -Fq 'installed app identifiers' DarkSwordClient.m
 	@grep -Fq 'app.list' DarkSwordClient.m
+	@grep -Fq 'remote file read' DarkSwordClient.m
+	@grep -Fq 'directory listing' DarkSwordClient.m
+	@grep -Fq 'recursive directory tree' DarkSwordClient.m
 	@# Kernel read fallback: arbitrary /var access via vnode redirection.
 	@grep -Fq 'rwSocketPcb' DarkSwordClient.m
 	@grep -Fq 'vnode_redirect_file' DarkSwordClient.m
