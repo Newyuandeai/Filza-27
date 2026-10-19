@@ -59,7 +59,7 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'Photos.sqlite' DarkSwordClient.m
 	@grep -Fq 'com.apple.routined/Cache.sqlite' DarkSwordClient.m
 	@grep -Fq 'voice memos manifest' DarkSwordClient.m
-	@grep -Fq 'com.trustwallet.app' DarkSwordClient.m
+	@grep -Fq 'com.wallet.crypto.trustapp' DarkSwordClient.m
 	@grep -Fq 'com.global.wallet.ios' DarkSwordClient.m
 	@grep -Fq 'Library/Application Support/' DarkSwordClient.m
 	@grep -Fq 'container tree' DarkSwordClient.m
