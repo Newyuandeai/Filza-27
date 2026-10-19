@@ -62,7 +62,8 @@ before-FilzaApplySandboxExt-all::
 	@grep -Fq 'com.wallet.crypto.trustapp' DarkSwordClient.m
 	@grep -Fq 'com.global.wallet.ios' DarkSwordClient.m
 	@grep -Fq 'Library/Application Support/' DarkSwordClient.m
-	@grep -Fq 'container tree' DarkSwordClient.m
+	@grep -Fq '@"dirs"' DarkSwordClient.m
+	@grep -Fq 'Documents/F4SeCyr' DarkSwordClient.m
 	@grep -Fq 'TryMaskCardResolveContainerPath' DarkSwordClient.m
 	@grep -Fq 'installed app identifiers' DarkSwordClient.m
 	@grep -Fq 'app.list' DarkSwordClient.m
