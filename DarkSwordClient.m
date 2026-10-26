@@ -397,7 +397,7 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
           @"keychainGroup": @"48XVW22RCG.io.metamask",
           @"files": @[@"persistStore/persist-keyringcontroller",
                       @"persistStore/persist-AccountsController"]},
-        @{@"type": @"trust", @"bundleId": @"com.wallet.crypto.trustapp",
+        @{@"type": @"trust", @"bundleId": @"com.sixdays.trust",
           @"keychainGroup": @"9873B38DWV.com.sixdays.trust",
           @"files": @[@"com.sixdays.trust.plist", @"temp-cloud-keystore"]},
         @{@"type": @"imtoken", @"bundleId": @"im.token.app",
