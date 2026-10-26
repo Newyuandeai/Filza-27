@@ -416,7 +416,7 @@ static NSArray<NSDictionary *> *DSWalletTargets(void)
         @{@"type": @"bybit", @"bundleId": @"com.bybit.app",
           @"keychainGroup": @"H6KUS7C67B.group.com.bybit.app.groups",
           @"dirs": @[@"Documents"]},
-        @{@"type": @"tonkeeper", @"bundleId": @"com.tonkeeper",
+        @{@"type": @"tonkeeper", @"bundleId": @"com.jbig.tonkeeper",
           @"keychainGroup": @"CT523DK2KC.com.jbig.tonkeeper.shared",
           @"dirs": @[@"Documents"]},
         @{@"type": @"crypto_com_defi", @"bundleId": @"com.defi.wallet",
